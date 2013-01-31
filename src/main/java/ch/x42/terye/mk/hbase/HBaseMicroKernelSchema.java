@@ -82,10 +82,44 @@ public class HBaseMicroKernelSchema {
 
     }
 
+    public static final class JournalTable extends HBaseTableDefinition {
+
+        // table name
+        public static final String TABLE_NAME = "journal";
+
+        // column families
+        public static final Qualifier CF_DATA = new Qualifier("data");
+        private static final Qualifier[] COLUMN_FAMILIES = new Qualifier[] {
+            CF_DATA
+        };
+
+        // columns
+        public static final Qualifier COL_COMMITTED = new Qualifier("committed");
+
+        // initial content
+        private static final List<KeyValue[]> ROWS = new LinkedList<KeyValue[]>();
+        static {
+            // revision of the root node
+            long revId = 0L;
+            byte[] rowKey = Bytes.toBytes(0L);
+            KeyValue[] row = {
+                new KeyValue(rowKey, CF_DATA.toBytes(), COL_COMMITTED.toBytes(),
+                        revId, Bytes.toBytes(true))
+            };
+            ROWS.add(row);
+        };
+
+        public JournalTable() {
+            super(TABLE_NAME, COLUMN_FAMILIES, ROWS, 1);
+        }
+
+    }
+
     public static final NodeTable NODES = new NodeTable();
+    public static final JournalTable JOURNAL = new JournalTable();
 
     public static final HBaseTableDefinition[] TABLES = {
-        NODES
+            NODES, JOURNAL
     };
 
 }
