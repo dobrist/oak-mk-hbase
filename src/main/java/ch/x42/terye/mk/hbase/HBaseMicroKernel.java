@@ -14,9 +14,11 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.ListIterator;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.NavigableMap;
@@ -53,13 +55,10 @@ public class HBaseMicroKernel implements MicroKernel {
 
     // XXX: temporarily use simple revision ids
     private static AtomicLong REVISION = new AtomicLong(0);
-    // cache for the revision ids we know are valid
-    private Set<Long> validRevisions;
 
     public HBaseMicroKernel(HBaseAdmin admin) throws Exception {
         tableMgr = new HBaseTableManager(admin, HBaseMicroKernelSchema.TABLES);
         journal = new Journal(tableMgr.get(JOURNAL));
-        this.validRevisions = new HashSet<Long>();
     }
 
     /**
@@ -130,7 +129,7 @@ public class HBaseMicroKernel implements MicroKernel {
             throws MicroKernelException {
         try {
             // parse revision id
-            Long revId = null;
+            long revId = journal.getHeadRevisionId();
             if (revisionId != null) {
                 try {
                     revId = Long.parseLong(revisionId);
@@ -143,7 +142,7 @@ public class HBaseMicroKernel implements MicroKernel {
             // do a filtered prefix scan:
             Scan scan = new Scan();
             scan.setMaxVersions();
-            scan.setTimeRange(0L, revId == null ? Long.MAX_VALUE : revId + 1);
+            scan.setTimeRange(0L, revId + 1);
             // compute scan range
             String prefix = path
                     + (path.charAt(path.length() - 1) == '/' ? "" : "/");
@@ -159,15 +158,15 @@ public class HBaseMicroKernel implements MicroKernel {
             Filter depthFilter = new RowFilter(CompareFilter.CompareOp.EQUAL,
                     new RegexStringComparator(regex));
             scan.setFilter(depthFilter);
-            Map<String, Result> rawNodes = new LinkedHashMap<String, Result>();
+            Map<String, Result> rows = new LinkedHashMap<String, Result>();
             ResultScanner scanner = tableMgr.get(NODES).getScanner(scan);
             for (Result result : scanner) {
-                rawNodes.put(NodeTable.rowKeyToPath(result.getRow()), result);
+                rows.put(NodeTable.rowKeyToPath(result.getRow()), result);
             }
             scanner.close();
 
             // parse nodes, create tree, build and return JSON
-            Map<String, Node> nodes = parseNodes(rawNodes);
+            Map<String, Node> nodes = parseNodes(rows, revId);
             return Node.toJson(Node.toTree(nodes), depth);
         } catch (Exception e) {
             throw new MicroKernelException("Error while getting nodes", e);
@@ -333,7 +332,7 @@ public class HBaseMicroKernel implements MicroKernel {
      */
     private void verifyUpdate(Map<String, Node> nodesBefore, Update update,
             long revisionId) throws MicroKernelException, IOException {
-        Map<String, Result> nodesAfter = getRawNodes(update.getModifiedNodes(),
+        Map<String, Result> nodesAfter = getNodeRows(update.getModifiedNodes(),
                 null);
         // loop through all nodes we have written
         for (String path : update.getModifiedNodes()) {
@@ -478,7 +477,7 @@ public class HBaseMicroKernel implements MicroKernel {
         return timestamp | machineId | counter;
     }
 
-    private Map<String, Result> getRawNodes(Collection<String> paths,
+    private Map<String, Result> getNodeRows(Collection<String> paths,
             Long revisionId) throws IOException {
         Map<String, Result> nodes = new LinkedHashMap<String, Result>();
         if (paths.isEmpty()) {
@@ -488,8 +487,9 @@ public class HBaseMicroKernel implements MicroKernel {
         for (String path : paths) {
             Get get = new Get(NodeTable.pathToRowKey(path));
             get.setMaxVersions();
-            get.setTimeRange(0L, revisionId == null ? Long.MAX_VALUE
-                    : revisionId + 1);
+            if (revisionId != null) {
+                get.setTimeRange(0L, revisionId + 1);
+            }
             batch.add(get);
         }
         for (Result result : tableMgr.get(NODES).get(batch)) {
@@ -501,73 +501,80 @@ public class HBaseMicroKernel implements MicroKernel {
         return nodes;
     }
 
-    private Result getRawNode(String path, Long revisionId) throws IOException {
-        List<String> paths = new LinkedList<String>();
-        paths.add(path);
-        return getRawNodes(paths, revisionId).get(path);
-    }
-
     private Map<String, Node> getNodes(Collection<String> paths, Long revisionId)
             throws IOException {
+        long revId = revisionId == null ? journal.getHeadRevisionId()
+                : revisionId;
         Map<String, Node> nodes = new TreeMap<String, Node>();
         List<String> pathsToRead = new LinkedList<String>();
         for (String path : paths) {
             pathsToRead.add(path);
         }
-        Map<String, Result> rawNodes = getRawNodes(pathsToRead, revisionId);
-        nodes.putAll(parseNodes(rawNodes));
+        Map<String, Result> rows = getNodeRows(pathsToRead, revisionId);
+        nodes.putAll(parseNodes(rows, revId));
         return nodes;
     }
 
     /**
-     * This method parses the specified raw nodes into nodes.
+     * This method parses the specified node rows into nodes.
      * 
-     * @param results the raw nodes
+     * @param results the node rows
      * @return a map mapping paths to the corresponding node
      */
-    private Map<String, Node> parseNodes(Map<String, Result> rawNodes)
-            throws IOException {
+    private Map<String, Node> parseNodes(Map<String, Result> rows,
+            long revisionId) throws IOException {
         Map<String, Node> nodes = new LinkedHashMap<String, Node>();
-        // loop through all raw nodes
-        for (Result raw : rawNodes.values()) {
-            String path = NodeTable.rowKeyToPath(raw.getRow());
-            Node node = new Node(path);
-            boolean nodeExists = false;
-            NavigableMap<byte[], NavigableMap<Long, byte[]>> columns = raw
-                    .getMap().get(NodeTable.CF_DATA.toBytes());
-            // if the node contains the "commit" column...
-            if (columns.containsKey(NodeTable.COL_COMMIT.toBytes())) {
-                // ...then cache all of its revisions as valid ones
-                validRevisions.addAll(columns.get(
-                        NodeTable.COL_COMMIT.toBytes()).keySet());
+        LinkedList<Long> revisionIds = journal.getRevisionIds();
+        // loop through all node rows
+        for (Result row : rows.values()) {
+            Node node = parseNode(row, revisionId, revisionIds);
+            if (node != null) {
+                nodes.put(node.getPath(), node);
             }
+        }
+        return nodes;
+    }
+
+    private Node parseNode(Result row, long revisionId,
+            LinkedList<Long> revisionIds) {
+        // create node
+        String path = NodeTable.rowKeyToPath(row.getRow());
+        Node node = new Node(path);
+        // get map and set of columns
+        NavigableMap<byte[], NavigableMap<Long, byte[]>> columnMap = row
+                .getMap().get(NodeTable.CF_DATA.toBytes());
+        Set<Entry<byte[], NavigableMap<Long, byte[]>>> columnSet = columnMap
+                .entrySet();
+        // get iterator starting at the end of the list
+        ListIterator<Long> iterator = revisionIds.listIterator(revisionIds
+                .size());
+        // skip revision ids that might have been added after 'revisionId'
+        while (iterator.hasPrevious()) {
+            if (iterator.previous() == revisionId) {
+                iterator.next();
+                break;
+            }
+        }
+        // replay revisions top bottom
+        while (iterator.hasPrevious()) {
+            long revId = iterator.previous();
             // loop through all columns
-            for (byte[] column : columns.keySet()) {
-                // skip columns we're not interested in
-                if (Arrays.equals(column, NodeTable.COL_COMMIT.toBytes())
-                        || Arrays.equals(column,
-                                NodeTable.COL_COMMIT_POINTER.toBytes())) {
-                    continue;
-                }
-                // get the most recent column value with a valid revision
-                byte[] value = null;
-                NavigableMap<Long, byte[]> revisions = columns.get(column);
-                // loop through all revisions, starting with the highest
-                for (Long revision : revisions.keySet()) {
-                    if (revisionIsValid(revision, raw)) {
-                        // we have found a valid revision for that column
-                        value = revisions.get(revision);
-                        break;
-                    }
-                }
-                // we haven't found a valid revision for that column...
+            Iterator<Entry<byte[], NavigableMap<Long, byte[]>>> colIterator = columnSet
+                    .iterator();
+            while (colIterator.hasNext()) {
+                Entry<byte[], NavigableMap<Long, byte[]>> entry = colIterator
+                        .next();
+                byte[] column = entry.getKey();
+                byte[] value = columnMap.get(column).get(revId);
                 if (value == null) {
-                    // ...thus it doesn't exist
+                    // there is no value for the current column at the current
+                    // revision, so go to next column
                     continue;
                 }
-                nodeExists = true;
+                // we have found a value, thus we are done for this column
+                colIterator.remove();
+                // handle system properties
                 if (column[0] == NodeTable.SYSTEM_PROPERTY_PREFIX) {
-                    // system properties
                     if (Arrays.equals(column,
                             NodeTable.COL_LAST_REVISION.toBytes())) {
                         node.setLastRevision(Bytes.toLong(value));
@@ -575,8 +582,9 @@ public class HBaseMicroKernel implements MicroKernel {
                             NodeTable.COL_CHILD_COUNT.toBytes())) {
                         node.setChildCount(Bytes.toLong(value));
                     }
-                } else if (column[0] == NodeTable.DATA_PROPERTY_PREFIX) {
-                    // user properties:
+                }
+                // handle user properties
+                else if (column[0] == NodeTable.DATA_PROPERTY_PREFIX) {
                     // name
                     byte[] tmp = new byte[column.length - 1];
                     System.arraycopy(column, 1, tmp, 0, tmp.length);
@@ -599,59 +607,8 @@ public class HBaseMicroKernel implements MicroKernel {
                     node.setProperty(name, val);
                 }
             }
-            if (nodeExists) {
-                nodes.put(path, node);
-            }
         }
-        return nodes;
-    }
-
-    /**
-     * This method checks if a revision is valid. It first does a cache lookup
-     * and if necessary then reads the specified commit root in order to verify
-     * the validity of the revision.
-     * 
-     * @param revisionId the revision id to validate
-     * @param result the raw node in which the revision occurs
-     * @return true if the revision is valid, false otherwise
-     */
-    private boolean revisionIsValid(long revisionId, Result raw)
-            throws IOException {
-        // check cache of valid revisions
-        if (validRevisions.contains(revisionId)) {
-            return true;
-        }
-        boolean valid = true;
-        NavigableMap<Long, byte[]> commitCol = raw.getMap()
-                .get(NodeTable.CF_DATA.toBytes())
-                .get(NodeTable.COL_COMMIT.toBytes());
-        if (commitCol == null || !commitCol.containsKey(revisionId)) {
-            // read commit root
-            NavigableMap<Long, byte[]> pointer = raw.getMap()
-                    .get(NodeTable.CF_DATA.toBytes())
-                    .get(NodeTable.COL_COMMIT_POINTER.toBytes());
-            int ptr = Bytes.toInt(pointer.get(revisionId));
-            String path = PathUtils.getAncestorPath(
-                    NodeTable.rowKeyToPath(raw.getRow()), ptr);
-            Result commitRoot = getRawNode(path, revisionId);
-            if (commitRoot == null) {
-                // commit root node doesn't exist
-                valid = false;
-            } else {
-                commitCol = commitRoot.getMap()
-                        .get(NodeTable.CF_DATA.toBytes())
-                        .get(NodeTable.COL_COMMIT.toBytes());
-                if (commitCol == null || !commitCol.containsKey(revisionId)) {
-                    // commit root is not a commit root for this revision
-                    valid = false;
-                }
-            }
-        }
-        // update cache
-        if (valid) {
-            validRevisions.add(revisionId);
-        }
-        return valid;
+        return node;
     }
 
     /**
