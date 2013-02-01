@@ -1,5 +1,6 @@
 package ch.x42.terye.mk.hbase;
 
+import static ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JOURNAL;
 import static ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.NODES;
 
 import java.io.IOException;
@@ -48,6 +49,8 @@ import ch.x42.terye.mk.hbase.HBaseTableDefinition.Qualifier;
 public class HBaseMicroKernel implements MicroKernel {
 
     private HBaseTableManager tableMgr;
+    private Journal journal;
+
     // XXX: temporarily use simple revision ids
     private static AtomicLong REVISION = new AtomicLong(0);
     // cache for the revision ids we know are valid
@@ -55,6 +58,7 @@ public class HBaseMicroKernel implements MicroKernel {
 
     public HBaseMicroKernel(HBaseAdmin admin) throws Exception {
         tableMgr = new HBaseTableManager(admin, HBaseMicroKernelSchema.TABLES);
+        journal = new Journal(tableMgr.get(JOURNAL));
         this.validRevisions = new HashSet<Long>();
     }
 
@@ -75,8 +79,7 @@ public class HBaseMicroKernel implements MicroKernel {
 
     @Override
     public String getHeadRevision() throws MicroKernelException {
-        // TODO Auto-generated method stub
-        return null;
+        return String.valueOf(journal.getHeadRevisionId());
     }
 
     @Override
