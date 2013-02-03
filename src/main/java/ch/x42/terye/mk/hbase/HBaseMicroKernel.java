@@ -7,11 +7,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -45,6 +42,7 @@ import org.apache.jackrabbit.mk.api.MicroKernelException;
 import org.apache.jackrabbit.mongomk.impl.json.JsopParser;
 import org.apache.jackrabbit.oak.commons.PathUtils;
 
+import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.NodeTable;
 import ch.x42.terye.mk.hbase.HBaseTableDefinition.Qualifier;
 
@@ -58,14 +56,22 @@ public class HBaseMicroKernel implements MicroKernel {
 
     public HBaseMicroKernel(HBaseAdmin admin) throws Exception {
         tableMgr = new HBaseTableManager(admin, HBaseMicroKernelSchema.TABLES);
-        journal = new Journal(tableMgr.get(JOURNAL));
+        journal = new Journal(tableMgr.create(JOURNAL));
     }
 
     /**
-     * Closes the HTable and HBaseAdmin instances and optionally drops the
-     * tables used by the microkernel.
+     * Disposes of the resources used by the microkernel internally. Multiple
+     * microkernels can execute this method at the same time, however this
+     * method does not close the HBase resources. Use dispose(boolean, boolean)
+     * for more control.
      */
-    public void dispose(boolean dropTables) throws IOException {
+    public void dispose() throws IOException {
+        dispose(false, false);
+    }
+
+    public void dispose(boolean dropTables, boolean closeHBaseResources)
+            throws IOException {
+        journal.dispose();
         if (dropTables) {
             try {
                 tableMgr.dropAllTables();
@@ -73,7 +79,9 @@ public class HBaseMicroKernel implements MicroKernel {
                 // nothing to do
             }
         }
-        tableMgr.dispose();
+        if (closeHBaseResources) {
+            tableMgr.dispose();
+        }
     }
 
     @Override
@@ -181,15 +189,14 @@ public class HBaseMicroKernel implements MicroKernel {
             Update update = new Update();
             new JsopParser(path, jsonDiff, update.getJsopHandler()).parse();
 
-            // generate new revision id
+            // generate new revision id and write journal entry
             long newRevId = generateNewRevisionId();
+            Put put = new Put(Bytes.toBytes(newRevId));
+            put.add(JournalTable.CF_DATA.toBytes(),
+                    JournalTable.COL_COMMITTED.toBytes(), Bytes.toBytes(false));
+            tableMgr.get(JOURNAL).put(put);
 
-            // find the commit root
-            String gcaPath = findGreatestCommonAncestor(update
-                    .getModifiedNodes());
-            int gcaDepth = PathUtils.getDepth(gcaPath);
-
-            // read nodes that are to be written (most of them will be cached)
+            // read nodes that are to be written
             Map<String, Node> nodesBefore = getNodes(update.getModifiedNodes(),
                     null);
 
@@ -198,20 +205,9 @@ public class HBaseMicroKernel implements MicroKernel {
 
             // write changes to HBase
             Map<String, Put> puts = new HashMap<String, Put>();
-            // - commit pointer
-            for (String node : update.getModifiedNodes()) {
-                Put put = getPut(node, newRevId, puts);
-                // if this node is not the commit root...
-                if (!node.equals(gcaPath)) {
-                    // ...then add a commit pointer pointing to it
-                    put.add(NodeTable.CF_DATA.toBytes(),
-                            NodeTable.COL_COMMIT_POINTER.toBytes(), newRevId,
-                            Bytes.toBytes(PathUtils.getDepth(node) - gcaDepth));
-                }
-            }
             // - added nodes
             for (String node : update.getAddedNodes()) {
-                Put put = getPut(node, newRevId, puts);
+                put = getPut(node, newRevId, puts);
                 // child count
                 put.add(NodeTable.CF_DATA.toBytes(),
                         NodeTable.COL_CHILD_COUNT.toBytes(), newRevId,
@@ -228,7 +224,7 @@ public class HBaseMicroKernel implements MicroKernel {
                 } else {
                     childCount = entry.getValue();
                 }
-                Put put = getPut(node, newRevId, puts);
+                put = getPut(node, newRevId, puts);
                 put.add(NodeTable.CF_DATA.toBytes(),
                         NodeTable.COL_CHILD_COUNT.toBytes(), newRevId,
                         Bytes.toBytes(childCount));
@@ -254,7 +250,7 @@ public class HBaseMicroKernel implements MicroKernel {
                     throw new MicroKernelException("Property " + entry.getKey()
                             + " has unknown type " + value.getClass());
                 }
-                Put put = getPut(parentPath, newRevId, puts);
+                put = getPut(parentPath, newRevId, puts);
                 Qualifier q = new Qualifier(NodeTable.DATA_PROPERTY_PREFIX,
                         name);
                 byte[] bytes = new byte[tmp.length + 1];
@@ -264,22 +260,28 @@ public class HBaseMicroKernel implements MicroKernel {
                         bytes);
             }
             // write batch
-            // XXX: check results for null
-            tableMgr.get(NODES).batch(new LinkedList<Put>(puts.values()));
+            Object[] results = tableMgr.get(NODES).batch(
+                    new LinkedList<Put>(puts.values()));
+            for (Object result : results) {
+                if (result == null) {
+                    // XXX: rollback
+                }
+            }
 
             // check for potential concurrent modifications
             verifyUpdate(nodesBefore, update, newRevId);
 
-            // write commit root
-            Put put = getPut(gcaPath, newRevId, puts);
-            put.add(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_COMMIT.toBytes(), newRevId,
-                    Bytes.toBytes(true));
-            tableMgr.get(NODES).put(put);
+            // XXX: commit revision
+            put = new Put(Bytes.toBytes(newRevId));
+            put.add(JournalTable.CF_DATA.toBytes(),
+                    JournalTable.COL_COMMITTED.toBytes(), Bytes.toBytes(true));
+            tableMgr.get(JOURNAL).put(put);
+            journal.addRevisionId(newRevId);
+
+            return String.valueOf(newRevId);
         } catch (Exception e) {
             throw new MicroKernelException("Commit failed", e);
         }
-        return null;
     }
 
     /**
@@ -609,49 +611,6 @@ public class HBaseMicroKernel implements MicroKernel {
             }
         }
         return node;
-    }
-
-    /**
-     * Finds and returns the longest path that is an ancestor of all other paths
-     * of the specified set.
-     */
-    private String findGreatestCommonAncestor(Collection<String> paths) {
-        if (paths.isEmpty()) {
-            return null;
-        }
-        // sort paths according to their depth
-        ArrayList<String> sortedPaths = new ArrayList<String>(paths);
-        Comparator<String> comparator = new Comparator<String>() {
-
-            @Override
-            public int compare(String path1, String path2) {
-                Integer nb1 = PathUtils.getDepth(path1);
-                Integer nb2 = PathUtils.getDepth(path2);
-                return nb1.compareTo(nb2);
-            }
-
-        };
-        Collections.sort(sortedPaths, comparator);
-        // one path with least depth
-        String path = sortedPaths.get(0);
-        // try all subpaths until root is reached
-        while (!PathUtils.denotesRoot(path)) {
-            // verify path is an ancestor of all other paths
-            boolean done = true;
-            for (int i = 1; i < sortedPaths.size(); i++) {
-                if (!PathUtils.isAncestor(path, sortedPaths.get(i))) {
-                    // candidate is not an ancestor of this path
-                    done = false;
-                    break;
-                }
-            }
-            if (done) {
-                return path;
-            }
-            path = PathUtils.getParentPath(path);
-        }
-        // no ancestor found, return root
-        return "/";
     }
 
 }

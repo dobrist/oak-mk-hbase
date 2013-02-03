@@ -34,10 +34,6 @@ public class HBaseMicroKernelSchema {
         public static final byte TYPE_BOOLEAN_PREFIX = (byte) 2;
 
         // columns
-        public static final Qualifier COL_COMMIT = new Qualifier(
-                SYSTEM_PROPERTY_PREFIX, "commit");
-        public static final Qualifier COL_COMMIT_POINTER = new Qualifier(
-                SYSTEM_PROPERTY_PREFIX, "commitPointer");
         public static final Qualifier COL_LAST_REVISION = new Qualifier(
                 SYSTEM_PROPERTY_PREFIX, "lastRevision");
         public static final Qualifier COL_CHILD_COUNT = new Qualifier(
@@ -50,8 +46,6 @@ public class HBaseMicroKernelSchema {
             long revId = 0L;
             byte[] rowKey = Bytes.toBytes("/");
             KeyValue[] row = {
-                    new KeyValue(rowKey, CF_DATA.toBytes(),
-                            COL_COMMIT.toBytes(), revId, Bytes.toBytes(true)),
                     new KeyValue(rowKey, CF_DATA.toBytes(),
                             COL_LAST_REVISION.toBytes(), revId,
                             Bytes.toBytes(revId)),
@@ -99,12 +93,11 @@ public class HBaseMicroKernelSchema {
         // initial content
         private static final List<KeyValue[]> ROWS = new LinkedList<KeyValue[]>();
         static {
-            // revision of the root node
-            long revId = 0L;
+            // initial revision
             byte[] rowKey = Bytes.toBytes(0L);
             KeyValue[] row = {
-                new KeyValue(rowKey, CF_DATA.toBytes(), COL_COMMITTED.toBytes(),
-                        revId, Bytes.toBytes(true))
+                new KeyValue(rowKey, CF_DATA.toBytes(),
+                        COL_COMMITTED.toBytes(), Bytes.toBytes(true))
             };
             ROWS.add(row);
         };

@@ -76,6 +76,15 @@ public class HBaseTableManager {
         return tables.get(table.getQualifier());
     }
 
+    /**
+     * Creates a new HTable instance corresponding to the specified table
+     * definition. The returned instance is not kept track of, it is the
+     * responsibility of the caller close it after usage.
+     */
+    public HTable create(HBaseTableDefinition table) throws Exception {
+        return initTable(table);
+    }
+
     public void dropAllTables() throws IOException {
         for (HBaseTableDefinition schema : HBaseMicroKernelSchema.TABLES) {
             admin.disableTable(schema.getQualifier().toBytes());
