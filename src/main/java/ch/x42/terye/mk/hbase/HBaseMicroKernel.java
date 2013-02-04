@@ -31,6 +31,7 @@ import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.client.Row;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.filter.CompareFilter;
 import org.apache.hadoop.hbase.filter.Filter;
@@ -189,8 +190,10 @@ public class HBaseMicroKernel implements MicroKernel {
             Update update = new Update();
             new JsopParser(path, jsonDiff, update.getJsopHandler()).parse();
 
-            // generate new revision id and write journal entry
+            // generate new revision id
             long newRevId = generateNewRevisionId();
+
+            // write journal entry
             Put put = new Put(Bytes.toBytes(newRevId));
             put.add(JournalTable.CF_DATA.toBytes(),
                     JournalTable.COL_COMMITTED.toBytes(), Bytes.toBytes(false));
@@ -203,65 +206,9 @@ public class HBaseMicroKernel implements MicroKernel {
             // make sure the update is valid
             validateUpdate(nodesBefore, update);
 
-            // write changes to HBase
-            Map<String, Put> puts = new HashMap<String, Put>();
-            // - added nodes
-            for (String node : update.getAddedNodes()) {
-                put = getPut(node, newRevId, puts);
-                // child count
-                put.add(NodeTable.CF_DATA.toBytes(),
-                        NodeTable.COL_CHILD_COUNT.toBytes(), newRevId,
-                        Bytes.toBytes(0L));
-            }
-            // - changed child counts
-            for (Entry<String, Long> entry : update.getChangedChildCounts()
-                    .entrySet()) {
-                String node = entry.getKey();
-                long childCount;
-                if (nodesBefore.containsKey(node)) {
-                    childCount = nodesBefore.get(node).getChildCount()
-                            + entry.getValue();
-                } else {
-                    childCount = entry.getValue();
-                }
-                put = getPut(node, newRevId, puts);
-                put.add(NodeTable.CF_DATA.toBytes(),
-                        NodeTable.COL_CHILD_COUNT.toBytes(), newRevId,
-                        Bytes.toBytes(childCount));
-            }
-            // - set properties
-            for (Entry<String, Object> entry : update.getSetProperties()
-                    .entrySet()) {
-                String parentPath = PathUtils.getParentPath(entry.getKey());
-                String name = PathUtils.getName(entry.getKey());
-                Object value = entry.getValue();
-                byte typePrefix;
-                byte[] tmp;
-                if (value instanceof String) {
-                    typePrefix = NodeTable.TYPE_STRING_PREFIX;
-                    tmp = Bytes.toBytes((String) value);
-                } else if (value instanceof Number) {
-                    typePrefix = NodeTable.TYPE_LONG_PREFIX;
-                    tmp = Bytes.toBytes(((Number) value).longValue());
-                } else if (value instanceof Boolean) {
-                    typePrefix = NodeTable.TYPE_BOOLEAN_PREFIX;
-                    tmp = Bytes.toBytes((Boolean) value);
-                } else {
-                    throw new MicroKernelException("Property " + entry.getKey()
-                            + " has unknown type " + value.getClass());
-                }
-                put = getPut(parentPath, newRevId, puts);
-                Qualifier q = new Qualifier(NodeTable.DATA_PROPERTY_PREFIX,
-                        name);
-                byte[] bytes = new byte[tmp.length + 1];
-                bytes[0] = typePrefix;
-                System.arraycopy(tmp, 0, bytes, 1, tmp.length);
-                put.add(NodeTable.CF_DATA.toBytes(), q.toBytes(), newRevId,
-                        bytes);
-            }
-            // write batch
-            Object[] results = tableMgr.get(NODES).batch(
-                    new LinkedList<Put>(puts.values()));
+            // generate update batch and write it to HBase
+            List<Row> batch = generateUpdateOps(nodesBefore, update, newRevId);
+            Object[] results = tableMgr.get(NODES).batch(batch);
             for (Object result : results) {
                 if (result == null) {
                     // XXX: rollback
@@ -271,7 +218,7 @@ public class HBaseMicroKernel implements MicroKernel {
             // check for potential concurrent modifications
             verifyUpdate(nodesBefore, update, newRevId);
 
-            // XXX: commit revision
+            // commit revision
             put = new Put(Bytes.toBytes(newRevId));
             put.add(JournalTable.CF_DATA.toBytes(),
                     JournalTable.COL_COMMITTED.toBytes(), Bytes.toBytes(true));
@@ -282,6 +229,104 @@ public class HBaseMicroKernel implements MicroKernel {
         } catch (Exception e) {
             throw new MicroKernelException("Commit failed", e);
         }
+    }
+
+    @Override
+    public String branch(String trunkRevisionId) throws MicroKernelException {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
+    @Override
+    public String merge(String branchRevisionId, String message)
+            throws MicroKernelException {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
+    @Override
+    public long getLength(String blobId) throws MicroKernelException {
+        // TODO Auto-generated method stub
+        return 0;
+    }
+
+    @Override
+    public int read(String blobId, long pos, byte[] buff, int off, int length)
+            throws MicroKernelException {
+        // TODO Auto-generated method stub
+        return 0;
+    }
+
+    @Override
+    public String write(InputStream in) throws MicroKernelException {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
+    /* private methods */
+
+    /* commit helper methods */
+
+    /**
+     * This method generates a new revision id. A revision id is a signed (but
+     * non-negative) long composed of the concatenation (left-to-right) of
+     * following fields:
+     * 
+     * <pre>
+     *  --------------------------------------------------------------
+     * |                    timestamp |    machine_id |       counter |
+     *  --------------------------------------------------------------
+     *  
+     * - timestamp: signed int, 4 bytes, [0, Integer.MAX_VALUE]
+     * - machine_id: unsigned short, 2 bytes, [0, 65535]
+     * - counter: unsigned short, 2 bytes, [0, 65535]
+     * </pre>
+     * 
+     * The unit of the timestamp is seconds and since we only have 4 bytes
+     * available, we base it on an artificial epoch (defined in the method) in
+     * order to have more values available. The machine id is generated using
+     * the hashcode of the MAC address string and not guaranteed to be unique
+     * (but very likely so). If the same machine commits a revision within the
+     * same second, then the counter field is used in order to create a unique
+     * revision id.
+     * 
+     * @return a new and unique revision id
+     */
+    private long generateNewRevisionId() {
+        // XXX: temporarily use simple revision ids
+        if (true) {
+            return REVISION.addAndGet(1);
+        }
+
+        // NEVER EVER CHANGE THIS VALUE
+        final long epoch = 1358845000;
+
+        // timestamp
+        long seconds = System.currentTimeMillis() / 1000 - epoch;
+        long timestamp = seconds << 32;
+
+        // machine id
+        long machineId;
+        try {
+            NetworkInterface network = NetworkInterface
+                    .getByInetAddress(InetAddress.getLocalHost());
+            byte[] address = network.getHardwareAddress();
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < address.length; i++) {
+                sb.append(String.format("%02X", address[i]));
+            }
+            machineId = sb.hashCode();
+        } catch (Throwable e) {
+            machineId = new Random().nextInt();
+        }
+        machineId = (machineId << 16) & Long.decode("0x00000000FFFF0000");
+
+        // counter
+        // XXX: tbd
+        long counter = 0;
+
+        // assemble and return revision id
+        return timestamp | machineId | counter;
     }
 
     /**
@@ -308,6 +353,68 @@ public class HBaseMicroKernel implements MicroKernel {
                         + ": node already exists");
             }
         }
+    }
+
+    private List<Row> generateUpdateOps(Map<String, Node> nodesBefore,
+            Update update, long newRevisionId) {
+        Map<String, Put> puts = new HashMap<String, Put>();
+        Put put;
+        // - added nodes
+        for (String node : update.getAddedNodes()) {
+            put = getPut(node, newRevisionId, puts);
+            // child count
+            put.add(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId,
+                    Bytes.toBytes(0L));
+        }
+        // - changed child counts
+        for (Entry<String, Long> entry : update.getChangedChildCounts()
+                .entrySet()) {
+            String node = entry.getKey();
+            long childCount;
+            if (nodesBefore.containsKey(node)) {
+                childCount = nodesBefore.get(node).getChildCount()
+                        + entry.getValue();
+            } else {
+                childCount = entry.getValue();
+            }
+            put = getPut(node, newRevisionId, puts);
+            put.add(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId,
+                    Bytes.toBytes(childCount));
+        }
+        // - set properties
+        for (Entry<String, Object> entry : update.getSetProperties().entrySet()) {
+            String parentPath = PathUtils.getParentPath(entry.getKey());
+            String name = PathUtils.getName(entry.getKey());
+            Object value = entry.getValue();
+            byte typePrefix;
+            byte[] tmp;
+            if (value instanceof String) {
+                typePrefix = NodeTable.TYPE_STRING_PREFIX;
+                tmp = Bytes.toBytes((String) value);
+            } else if (value instanceof Number) {
+                typePrefix = NodeTable.TYPE_LONG_PREFIX;
+                tmp = Bytes.toBytes(((Number) value).longValue());
+            } else if (value instanceof Boolean) {
+                typePrefix = NodeTable.TYPE_BOOLEAN_PREFIX;
+                tmp = Bytes.toBytes((Boolean) value);
+            } else {
+                throw new MicroKernelException("Property " + entry.getKey()
+                        + " has unknown type " + value.getClass());
+            }
+            put = getPut(parentPath, newRevisionId, puts);
+            Qualifier q = new Qualifier(NodeTable.DATA_PROPERTY_PREFIX, name);
+            byte[] bytes = new byte[tmp.length + 1];
+            bytes[0] = typePrefix;
+            System.arraycopy(tmp, 0, bytes, 1, tmp.length);
+            put.add(NodeTable.CF_DATA.toBytes(), q.toBytes(), newRevisionId,
+                    bytes);
+        }
+        // assemble operations
+        List<Row> ops = new LinkedList<Row>();
+        ops.addAll(puts.values());
+        return ops;
     }
 
     private Put getPut(String path, long revisionId, Map<String, Put> puts) {
@@ -383,101 +490,7 @@ public class HBaseMicroKernel implements MicroKernel {
         }
     }
 
-    @Override
-    public String branch(String trunkRevisionId) throws MicroKernelException {
-        // TODO Auto-generated method stub
-        return null;
-    }
-
-    @Override
-    public String merge(String branchRevisionId, String message)
-            throws MicroKernelException {
-        // TODO Auto-generated method stub
-        return null;
-    }
-
-    @Override
-    public long getLength(String blobId) throws MicroKernelException {
-        // TODO Auto-generated method stub
-        return 0;
-    }
-
-    @Override
-    public int read(String blobId, long pos, byte[] buff, int off, int length)
-            throws MicroKernelException {
-        // TODO Auto-generated method stub
-        return 0;
-    }
-
-    @Override
-    public String write(InputStream in) throws MicroKernelException {
-        // TODO Auto-generated method stub
-        return null;
-    }
-
-    /* private methods */
-
-    /**
-     * This method generates a new revision id. A revision id is a signed (but
-     * non-negative) long composed of the concatenation (left-to-right) of
-     * following fields:
-     * 
-     * <pre>
-     *  --------------------------------------------------------------
-     * |                    timestamp |    machine_id |       counter |
-     *  --------------------------------------------------------------
-     *  
-     * - timestamp: signed int, 4 bytes, [0, Integer.MAX_VALUE]
-     * - machine_id: unsigned short, 2 bytes, [0, 65535]
-     * - counter: unsigned short, 2 bytes, [0, 65535]
-     * </pre>
-     * 
-     * The unit of the timestamp is seconds and since we only have 4 bytes
-     * available, we base it on an artificial epoch (defined in the method) in
-     * order to have more values available. The machine id is generated using
-     * the hashcode of the MAC address string and not guaranteed to be unique
-     * (but very likely so). If the same machine commits a revision within the
-     * same second, then the counter field is used in order to create a unique
-     * revision id.
-     * 
-     * @return a new and unique revision id
-     */
-    private long generateNewRevisionId() {
-        // XXX: temporarily use simple revision ids
-        if (true) {
-            return REVISION.addAndGet(1);
-        }
-
-        // NEVER EVER CHANGE THIS VALUE
-        final long epoch = 1358845000;
-
-        // timestamp
-        long seconds = System.currentTimeMillis() / 1000 - epoch;
-        long timestamp = seconds << 32;
-
-        // machine id
-        long machineId;
-        try {
-            NetworkInterface network = NetworkInterface
-                    .getByInetAddress(InetAddress.getLocalHost());
-            byte[] address = network.getHardwareAddress();
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < address.length; i++) {
-                sb.append(String.format("%02X", address[i]));
-            }
-            machineId = sb.hashCode();
-        } catch (Throwable e) {
-            machineId = new Random().nextInt();
-        }
-        machineId = (machineId << 16) & Long.decode("0x00000000FFFF0000");
-
-        // counter
-        // XXX: tbd
-        long counter = 0;
-
-        // assemble and return revision id
-        return timestamp | machineId | counter;
-    }
+    /* helper methods for reading the node table */
 
     private Map<String, Result> getNodeRows(Collection<String> paths,
             Long revisionId) throws IOException {
