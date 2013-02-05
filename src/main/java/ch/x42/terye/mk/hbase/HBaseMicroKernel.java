@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
 import org.apache.hadoop.hbase.TableNotFoundException;
+import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.apache.hadoop.hbase.client.Put;
@@ -48,6 +49,11 @@ import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.NodeTable;
 import ch.x42.terye.mk.hbase.HBaseTableDefinition.Qualifier;
 
 public class HBaseMicroKernel implements MicroKernel {
+
+    /* configuration */
+
+    // max number of retries in case of a concurrent modification
+    public static final int MAX_RETRIES = 10;
 
     private HBaseTableManager tableMgr;
     private Journal journal;
@@ -190,41 +196,75 @@ public class HBaseMicroKernel implements MicroKernel {
             Update update = new Update();
             new JsopParser(path, jsonDiff, update.getJsopHandler()).parse();
 
-            // generate new revision id
-            long newRevId = generateNewRevisionId();
-
-            // write journal entry
-            Put put = new Put(Bytes.toBytes(newRevId));
-            put.add(JournalTable.CF_DATA.toBytes(),
-                    JournalTable.COL_COMMITTED.toBytes(), Bytes.toBytes(false));
-            tableMgr.get(JOURNAL).put(put);
-
-            // read nodes that are to be written
-            Map<String, Node> nodesBefore = getNodes(update.getModifiedNodes(),
-                    null);
-
-            // make sure the update is valid
-            validateUpdate(nodesBefore, update);
-
-            // generate update batch and write it to HBase
-            List<Row> batch = generateUpdateOps(nodesBefore, update, newRevId);
-            Object[] results = tableMgr.get(NODES).batch(batch);
-            for (Object result : results) {
-                if (result == null) {
-                    // XXX: rollback
+            int tries = MAX_RETRIES;
+            long newRevId;
+            Map<String, Node> nodesBefore;
+            do {
+                if (--tries < 0) {
+                    throw new MicroKernelException("Reached retry limit");
                 }
-            }
 
-            // check for potential concurrent modifications
-            verifyUpdate(nodesBefore, update, newRevId);
+                // generate new revision id
+                newRevId = generateNewRevisionId();
 
-            // commit revision
-            put = new Put(Bytes.toBytes(newRevId));
-            put.add(JournalTable.CF_DATA.toBytes(),
-                    JournalTable.COL_COMMITTED.toBytes(), Bytes.toBytes(true));
-            tableMgr.get(JOURNAL).put(put);
+                // write journal entry for this revision
+                Put put = new Put(Bytes.toBytes(newRevId));
+                put.add(JournalTable.CF_DATA.toBytes(),
+                        JournalTable.COL_COMMITTED.toBytes(),
+                        Bytes.toBytes(false));
+                put.add(JournalTable.CF_DATA.toBytes(),
+                        JournalTable.COL_ABORT.toBytes(), Bytes.toBytes(false));
+                tableMgr.get(JOURNAL).put(put);
+
+                // update journal in order to have the newest possible versions
+                // of the node we read before our write
+                journal.update();
+
+                // read nodes that are to be written
+                nodesBefore = getNodes(update.getModifiedNodes(), null);
+
+                // make sure the update is valid
+                validateUpdate(nodesBefore, update);
+
+                // generate update batch and write it to HBase
+                List<Row> batch = generateUpdateOps(nodesBefore, update,
+                        newRevId);
+                Object[] results = tableMgr.get(NODES).batch(batch);
+                for (Object result : results) {
+                    // a null result means the write operation failed, in which
+                    // case we roll back
+                    if (result == null) {
+                        rollback(update, newRevId);
+                        continue;
+                    }
+                }
+
+                // check for potential concurrent modifications
+                if (verifyUpdate(nodesBefore, update, newRevId)) {
+                    // commit revision
+                    put = new Put(Bytes.toBytes(newRevId));
+                    put.add(JournalTable.CF_DATA.toBytes(),
+                            JournalTable.COL_COMMITTED.toBytes(),
+                            Bytes.toBytes(true));
+                    if (tableMgr.get(JOURNAL).checkAndPut(
+                            Bytes.toBytes(newRevId),
+                            JournalTable.CF_DATA.toBytes(),
+                            JournalTable.COL_ABORT.toBytes(),
+                            Bytes.toBytes(false), put))
+                        // revision has been committed
+                        break;
+                    else {
+                        // our revision has been marked as abort by another
+                        // revision, so we roll back
+                        rollback(update, newRevId);
+                        continue;
+                    }
+                }
+                // there has been a concurrent modification, do a rollback
+                rollback(update, newRevId);
+            } while (true);
+
             journal.addRevisionId(newRevId);
-
             return String.valueOf(newRevId);
         } catch (Exception e) {
             throw new MicroKernelException("Commit failed", e);
@@ -265,7 +305,7 @@ public class HBaseMicroKernel implements MicroKernel {
 
     /* private methods */
 
-    /* commit helper methods */
+    /* helper methods for commit */
 
     /**
      * This method generates a new revision id. A revision id is a signed (but
@@ -295,7 +335,7 @@ public class HBaseMicroKernel implements MicroKernel {
     private long generateNewRevisionId() {
         // XXX: temporarily use simple revision ids
         if (true) {
-            return REVISION.addAndGet(1);
+            return REVISION.incrementAndGet();
         }
 
         // NEVER EVER CHANGE THIS VALUE
@@ -429,8 +469,8 @@ public class HBaseMicroKernel implements MicroKernel {
     }
 
     /**
-     * This method verifies that the update has correctly been written to the
-     * database. In particular, it detects conflicts of concurrent writes.
+     * This method verifies that the update has not conflicted with another
+     * concurrent update.
      * 
      * @param nodesBefore the state of the nodes that were written before the
      *            write
@@ -439,23 +479,17 @@ public class HBaseMicroKernel implements MicroKernel {
      *            written in
      * @throws MicroKernelException if there was a conflicting concurrent update
      */
-    private void verifyUpdate(Map<String, Node> nodesBefore, Update update,
+    private boolean verifyUpdate(Map<String, Node> nodesBefore, Update update,
             long revisionId) throws MicroKernelException, IOException {
         Map<String, Result> nodesAfter = getNodeRows(update.getModifiedNodes(),
                 null);
         // loop through all nodes we have written
         for (String path : update.getModifiedNodes()) {
-            boolean concurrentUpdate = false;
             Result after = nodesAfter.get(path);
             // get "last revision" column
             NavigableMap<Long, byte[]> lastRevCol = after.getMap()
                     .get(NodeTable.CF_DATA.toBytes())
                     .get(NodeTable.COL_LAST_REVISION.toBytes());
-            // verify that our revision is contained in the column
-            if (!lastRevCol.containsKey(revisionId)) {
-                throw new MicroKernelException("Write of node " + path
-                        + " failed");
-            }
             // split column in two parts at our revision
             NavigableMap<Long, byte[]> lastRevColHead = lastRevCol.headMap(
                     revisionId, false);
@@ -463,14 +497,26 @@ public class HBaseMicroKernel implements MicroKernel {
                     revisionId, false);
             // check that nobody wrote on top of our uncommitted changes
             if (!lastRevColHead.isEmpty()) {
-                concurrentUpdate = true;
+                // we try to mark those revisions as abort
+                boolean success = false;
+                for (Long l : lastRevColHead.keySet()) {
+                    Put put = new Put(Bytes.toBytes(l));
+                    put.add(JournalTable.CF_DATA.toBytes(),
+                            JournalTable.COL_ABORT.toBytes(),
+                            Bytes.toBytes(true));
+                    success = tableMgr.get(JOURNAL).checkAndPut(
+                            Bytes.toBytes(l), JournalTable.CF_DATA.toBytes(),
+                            JournalTable.COL_COMMITTED.toBytes(),
+                            Bytes.toBytes(false), put);
+                }
+                return success;
             } else {
                 // make sure nobody wrote immediately before we did:
                 // if the node didn't exist before...
                 if (!nodesBefore.containsKey(path)) {
                     // ...then there should be no revision before ours
                     if (!lastRevColTail.isEmpty()) {
-                        concurrentUpdate = true;
+                        return false;
                     }
                 } else {
                     // ...else the revision before ours must be equal to the one
@@ -478,16 +524,54 @@ public class HBaseMicroKernel implements MicroKernel {
                     Node before = nodesBefore.get(path);
                     if (!lastRevColTail.firstKey().equals(
                             before.getLastRevision())) {
-                        concurrentUpdate = true;
+                        return false;
                     }
                 }
             }
-            if (concurrentUpdate) {
-                // this update conflicted with some other update
-                throw new MicroKernelException("Node " + path
-                        + " was concurrently modified by another revision");
-            }
         }
+        return true;
+    }
+
+    private void rollback(Update update, long newRevisionId) throws IOException {
+        Map<String, Delete> deletes = new HashMap<String, Delete>();
+        Delete delete;
+        // - rollback added nodes
+        for (String node : update.getAddedNodes()) {
+            delete = getDelete(node, newRevisionId, deletes);
+            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId);
+        }
+        // - rollback changed child counts
+        for (String node : update.getChangedChildCounts().keySet()) {
+            delete = getDelete(node, newRevisionId, deletes);
+            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId);
+        }
+        // - rollback set properties
+        for (String property : update.getSetProperties().keySet()) {
+            String parentPath = PathUtils.getParentPath(property);
+            String name = PathUtils.getName(property);
+            delete = getDelete(parentPath, newRevisionId, deletes);
+            Qualifier q = new Qualifier(NodeTable.DATA_PROPERTY_PREFIX, name);
+            delete.deleteColumn(NodeTable.CF_DATA.toBytes(), q.toBytes(),
+                    newRevisionId);
+        }
+        List<Delete> batch = new LinkedList<Delete>(deletes.values());
+        tableMgr.get(NODES).delete(batch);
+        // remove journal entry
+        delete = new Delete(Bytes.toBytes(newRevisionId));
+        tableMgr.get(JOURNAL).delete(delete);
+    }
+
+    private Delete getDelete(String path, long revisionId,
+            Map<String, Delete> deletes) {
+        if (!deletes.containsKey(path)) {
+            Delete delete = new Delete(NodeTable.pathToRowKey(path));
+            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_LAST_REVISION.toBytes(), revisionId);
+            deletes.put(path, delete);
+        }
+        return deletes.get(path);
     }
 
     /* helper methods for reading the node table */
@@ -525,7 +609,8 @@ public class HBaseMicroKernel implements MicroKernel {
         for (String path : paths) {
             pathsToRead.add(path);
         }
-        Map<String, Result> rows = getNodeRows(pathsToRead, revisionId);
+        // XXX: don't get all revisions
+        Map<String, Result> rows = getNodeRows(pathsToRead, null);
         nodes.putAll(parseNodes(rows, revId));
         return nodes;
     }

@@ -2,8 +2,8 @@ package ch.x42.terye.mk.hbase;
 
 import java.io.IOException;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.TableNotFoundException;
@@ -13,29 +13,29 @@ import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.util.Bytes;
 
+import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
+
 public class Journal {
 
     private static final int TIMEOUT = 1500;
-    private static final int GRACE_PERIOD = 5000;
 
     private HTable table;
-    private AtomicLong headRevisionId;
-    private LinkedList<Long> revisionIds;
-    private long lastHeadRevisionId;
-    private LinkedList<Long> currentRevisionIds;
+    public LinkedHashSet<Long> revisionIds;
+    private long headRevisionId;
 
     private Thread thread;
     private boolean done = false;
-    private Object lock = new Object();
+    private Object timeoutLock;
+    private Object updateLock;
 
     public Journal(HTable table) throws IOException {
         this.table = table;
-        this.headRevisionId = new AtomicLong(0);
-        this.revisionIds = new LinkedList<Long>();
+        this.revisionIds = new LinkedHashSet<Long>();
         this.revisionIds.add(0L);
-        this.lastHeadRevisionId = 0L;
-        this.currentRevisionIds = new LinkedList<Long>();
-        this.currentRevisionIds.add(0L);
+        this.headRevisionId = 0L;
+        this.timeoutLock = new Object();
+        this.updateLock = new Object();
+
         // start update thread
         Updater updater = new Updater();
         updater.getNewestRevisionIds();
@@ -44,31 +44,42 @@ public class Journal {
         thread.start();
     }
 
+    public void update() {
+        try {
+            synchronized (updateLock) {
+                synchronized (timeoutLock) {
+                    timeoutLock.notify();
+                }
+                updateLock.wait();
+            }
+        } catch (InterruptedException e) {
+            // thread has been notified
+        }
+    }
+
     public long getHeadRevisionId() {
-        return headRevisionId.get();
+        synchronized (revisionIds) {
+            return headRevisionId;
+        }
     }
 
     public LinkedList<Long> getRevisionIds() {
-        if (headRevisionId.get() != lastHeadRevisionId) {
-            synchronized (revisionIds) {
-                currentRevisionIds = new LinkedList<Long>(revisionIds);
-            }
-            lastHeadRevisionId = headRevisionId.get();
+        synchronized (revisionIds) {
+            return new LinkedList<Long>(revisionIds);
         }
-        return currentRevisionIds;
     }
 
     public void addRevisionId(long revisionId) {
         synchronized (revisionIds) {
             revisionIds.add(revisionId);
-            headRevisionId.set(revisionId);
+            headRevisionId = revisionId;
         }
     }
 
     public void dispose() throws IOException {
         done = true;
-        synchronized (lock) {
-            lock.notify();
+        synchronized (timeoutLock) {
+            timeoutLock.notify();
         }
         try {
             // wait for thread to die
@@ -83,19 +94,22 @@ public class Journal {
 
         private void getNewestRevisionIds() throws IOException {
             Scan scan = new Scan();
-            long headRevId = headRevisionId.get();
-            long tmp = GRACE_PERIOD << 32;
-            long startRow = headRevId - tmp < 0 ? headRevId : headRevId - tmp;
-            scan.setStartRow(Bytes.toBytes(startRow));
+            // XXX: don't scan full table every time
             ResultScanner scanner = table.getScanner(scan);
             Iterator<Result> iterator = scanner.iterator();
             while (iterator.hasNext()) {
                 Result result = iterator.next();
+                // discard uncommitted revisions
+                if (!Bytes.toBoolean(result.getValue(
+                        JournalTable.CF_DATA.toBytes(),
+                        JournalTable.COL_COMMITTED.toBytes()))) {
+                    continue;
+                }
                 long id = Bytes.toLong(result.getRow());
                 synchronized (revisionIds) {
-                    revisionIds.add(id);
-                    if (!iterator.hasNext()) {
-                        headRevisionId.set(id);
+                    if (!revisionIds.contains(id)) {
+                        revisionIds.add(id);
+                        headRevisionId = id;
                     }
                 }
             }
@@ -107,8 +121,11 @@ public class Journal {
             while (!done) {
                 try {
                     getNewestRevisionIds();
-                    synchronized (lock) {
-                        lock.wait(TIMEOUT);
+                    synchronized (updateLock) {
+                        updateLock.notify();
+                    }
+                    synchronized (timeoutLock) {
+                        timeoutLock.wait(TIMEOUT);
                     }
                 } catch (InterruptedException e) {
                     // thread has been interrupted
