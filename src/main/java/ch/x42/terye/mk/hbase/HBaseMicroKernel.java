@@ -22,7 +22,6 @@ import java.util.NavigableMap;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
 import org.apache.hadoop.hbase.TableNotFoundException;
@@ -52,20 +51,23 @@ public class HBaseMicroKernel implements MicroKernel {
 
     /* configuration */
 
+    // the timestamp of the revision ids generated is based on the following
+    // date instead of the usual unix epoch:
+    // 01.01.2013 00:00:00
+    // NEVER EVER CHANGE THIS VALUE
+    private static final long EPOCH = 1356998400;
     // max number of retries in case of a concurrent modification
-    public static final int MAX_RETRIES = 10;
+    private static final int MAX_RETRIES = 10;
 
     private HBaseTableManager tableMgr;
     private Journal journal;
 
     // the machine id associated with this microkernel instance
-    private Long machineId;
-    // the time component of the revision id last generated
-    private long lastSeconds = -1;
+    private long machineId;
+    // the timestamp of the revision id last generated
+    private long lastTimestamp;
     // counter to differentiate revision ids generated within the same second
-    private int counter = 0;
-    // XXX: temporarily use simple revision ids
-    private static AtomicLong REVISION = new AtomicLong(0);
+    private int count;
 
     /**
      * This constructor can be used to explicitely set the machine id. This is
@@ -79,11 +81,27 @@ public class HBaseMicroKernel implements MicroKernel {
             throw new IllegalArgumentException("Machine id is out of range");
         }
         this.machineId = (long) machineId;
+        this.lastTimestamp = -1;
+        this.count = 0;
     }
 
     public HBaseMicroKernel(HBaseAdmin admin) throws Exception {
         this(admin, 0);
-        this.machineId = null;
+        // generate machine id
+        try {
+            // get MAC address string
+            NetworkInterface network = NetworkInterface
+                    .getByInetAddress(InetAddress.getLocalHost());
+            byte[] address = network.getHardwareAddress();
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < address.length; i++) {
+                sb.append(String.format("%02X", address[i]));
+            }
+            machineId = (long) sb.hashCode();
+        } catch (Throwable e) {
+            // some error occurred, use a random machine id
+            machineId = (long) new Random().nextInt();
+        }
     }
 
     /**
@@ -333,65 +351,50 @@ public class HBaseMicroKernel implements MicroKernel {
      * following fields:
      * 
      * <pre>
-     *  --------------------------------------------------------------
-     * |                    timestamp |    machine_id |       counter |
-     *  --------------------------------------------------------------
+     *  ------------------------------------------------------------------
+     * |                              timestamp |     machine_id |  count |
+     *  ------------------------------------------------------------------
      *  
-     * - timestamp: signed int, 4 bytes, [0, Integer.MAX_VALUE]
-     * - machine_id: unsigned short, 2 bytes, [0, 65535]
-     * - counter: unsigned short, 2 bytes, [0, 65535]
+     * - timestamp: 5 bytes, [0, 1099511627775]
+     * - machine_id: 2 bytes, [0, 65535]
+     * - count: 1 byte, [0, 65535]
      * </pre>
      * 
-     * The unit of the timestamp is seconds and since we only have 4 bytes
-     * available, we base it on an artificial epoch (defined in the method) in
-     * order to have more values available. The machine id is generated using
-     * the hashcode of the MAC address string and not guaranteed to be unique
-     * (but very likely so). If the same machine commits a revision within the
-     * same second, then the counter field is used in order to create a unique
+     * The unit of the "timestamp" field is milliseconds and since we only have
+     * 4 bytes available, we base it on an artificial epoch constant in order to
+     * have more values available. The machine id used for "machine_id" is
+     * either set explicitly or generated using the hashcode of the MAC address
+     * string. If the same machine commits a revision within the same
+     * millisecond, then the "count" field is used in order to create a unique
      * revision id.
      * 
      * @return a new and unique revision id
      */
     private long generateNewRevisionId() {
-        // XXX: temporarily use simple revision ids
-        if (true) {
-            return REVISION.incrementAndGet();
-        }
-
-        // NEVER EVER CHANGE THIS VALUE
-        final long epoch = 1358845000;
-
         // timestamp
-        long seconds = System.currentTimeMillis() / 1000 - epoch;
-        long timestamp = seconds << 32;
+        long timestamp = System.currentTimeMillis() - EPOCH;
+        timestamp <<= 24;
+        // check for overflow
+        if (timestamp < 0) {
+            // we have use all available time values
+            throw new MicroKernelException("Error generating new revision id");
+        }
 
         // machine id
-        if (machineId == null) {
-            try {
-                NetworkInterface network = NetworkInterface
-                        .getByInetAddress(InetAddress.getLocalHost());
-                byte[] address = network.getHardwareAddress();
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < address.length; i++) {
-                    sb.append(String.format("%02X", address[i]));
-                }
-                machineId = (long) sb.hashCode();
-            } catch (Throwable e) {
-                machineId = (long) new Random().nextInt();
-            }
-        }
-        machineId = (machineId << 16) & Long.decode("0x00000000FFFF0000");
+        long machineId = (this.machineId << 16)
+                & Long.decode("0x00000000FFFF0000");
 
         // counter
-        if (seconds == lastSeconds) {
-            counter++;
+        if (timestamp == lastTimestamp) {
+            count++;
         } else {
-            lastSeconds = seconds;
-            counter = 0;
+            lastTimestamp = timestamp;
+            count = 0;
         }
+        long count = this.count & Integer.decode("0x000000FF");
 
         // assemble and return revision id
-        return timestamp | machineId | counter;
+        return timestamp | machineId | count;
     }
 
     /**
