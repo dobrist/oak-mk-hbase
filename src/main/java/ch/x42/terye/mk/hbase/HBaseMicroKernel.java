@@ -195,7 +195,6 @@ public class HBaseMicroKernel implements MicroKernel {
             // do a filtered prefix scan:
             Scan scan = new Scan();
             scan.setMaxVersions();
-            scan.setTimeRange(0L, revId + 1);
             // compute scan range
             String prefix = path
                     + (path.charAt(path.length() - 1) == '/' ? "" : "/");
@@ -509,8 +508,7 @@ public class HBaseMicroKernel implements MicroKernel {
      */
     private boolean verifyUpdate(Map<String, Node> nodesBefore, Update update,
             long revisionId) throws MicroKernelException, IOException {
-        Map<String, Result> nodesAfter = getNodeRows(update.getModifiedNodes(),
-                null);
+        Map<String, Result> nodesAfter = getNodeRows(update.getModifiedNodes());
         // loop through all nodes we have written
         for (String path : update.getModifiedNodes()) {
             Result after = nodesAfter.get(path);
@@ -604,8 +602,8 @@ public class HBaseMicroKernel implements MicroKernel {
 
     /* helper methods for reading the node table */
 
-    private Map<String, Result> getNodeRows(Collection<String> paths,
-            Long revisionId) throws IOException {
+    private Map<String, Result> getNodeRows(Collection<String> paths)
+            throws IOException {
         Map<String, Result> nodes = new LinkedHashMap<String, Result>();
         if (paths.isEmpty()) {
             return nodes;
@@ -614,9 +612,6 @@ public class HBaseMicroKernel implements MicroKernel {
         for (String path : paths) {
             Get get = new Get(NodeTable.pathToRowKey(path));
             get.setMaxVersions();
-            if (revisionId != null) {
-                get.setTimeRange(0L, revisionId + 1);
-            }
             batch.add(get);
         }
         for (Result result : tableMgr.get(NODES).get(batch)) {
@@ -638,7 +633,7 @@ public class HBaseMicroKernel implements MicroKernel {
             pathsToRead.add(path);
         }
         // XXX: don't get all revisions
-        Map<String, Result> rows = getNodeRows(pathsToRead, null);
+        Map<String, Result> rows = getNodeRows(pathsToRead);
         nodes.putAll(parseNodes(rows, revId));
         return nodes;
     }
