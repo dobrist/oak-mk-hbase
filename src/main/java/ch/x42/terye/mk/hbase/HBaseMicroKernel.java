@@ -60,6 +60,10 @@ public class HBaseMicroKernel implements MicroKernel {
 
     // the machine id associated with this microkernel instance
     private Long machineId;
+    // the time component of the revision id last generated
+    private long lastSeconds = -1;
+    // counter to differentiate revision ids generated within the same second
+    private int counter = 0;
     // XXX: temporarily use simple revision ids
     private static AtomicLong REVISION = new AtomicLong(0);
 
@@ -379,8 +383,12 @@ public class HBaseMicroKernel implements MicroKernel {
         machineId = (machineId << 16) & Long.decode("0x00000000FFFF0000");
 
         // counter
-        // XXX: tbd
-        long counter = 0;
+        if (seconds == lastSeconds) {
+            counter++;
+        } else {
+            lastSeconds = seconds;
+            counter = 0;
+        }
 
         // assemble and return revision id
         return timestamp | machineId | counter;
