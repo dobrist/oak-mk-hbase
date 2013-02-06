@@ -58,12 +58,28 @@ public class HBaseMicroKernel implements MicroKernel {
     private HBaseTableManager tableMgr;
     private Journal journal;
 
+    // the machine id associated with this microkernel instance
+    private Long machineId;
     // XXX: temporarily use simple revision ids
     private static AtomicLong REVISION = new AtomicLong(0);
 
-    public HBaseMicroKernel(HBaseAdmin admin) throws Exception {
+    /**
+     * This constructor can be used to explicitely set the machine id. This is
+     * useful when concurrently executing multiple microkernels on the same
+     * machine.
+     */
+    public HBaseMicroKernel(HBaseAdmin admin, int machineId) throws Exception {
         tableMgr = new HBaseTableManager(admin, HBaseMicroKernelSchema.TABLES);
         journal = new Journal(tableMgr.create(JOURNAL));
+        if (machineId < 0 || machineId > 65535) {
+            throw new IllegalArgumentException("Machine id is out of range");
+        }
+        this.machineId = (long) machineId;
+    }
+
+    public HBaseMicroKernel(HBaseAdmin admin) throws Exception {
+        this(admin, 0);
+        this.machineId = null;
     }
 
     /**
@@ -346,18 +362,19 @@ public class HBaseMicroKernel implements MicroKernel {
         long timestamp = seconds << 32;
 
         // machine id
-        long machineId;
-        try {
-            NetworkInterface network = NetworkInterface
-                    .getByInetAddress(InetAddress.getLocalHost());
-            byte[] address = network.getHardwareAddress();
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < address.length; i++) {
-                sb.append(String.format("%02X", address[i]));
+        if (machineId == null) {
+            try {
+                NetworkInterface network = NetworkInterface
+                        .getByInetAddress(InetAddress.getLocalHost());
+                byte[] address = network.getHardwareAddress();
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < address.length; i++) {
+                    sb.append(String.format("%02X", address[i]));
+                }
+                machineId = (long) sb.hashCode();
+            } catch (Throwable e) {
+                machineId = (long) new Random().nextInt();
             }
-            machineId = sb.hashCode();
-        } catch (Throwable e) {
-            machineId = new Random().nextInt();
         }
         machineId = (machineId << 16) & Long.decode("0x00000000FFFF0000");
 
