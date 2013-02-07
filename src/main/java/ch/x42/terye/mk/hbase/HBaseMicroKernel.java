@@ -58,10 +58,12 @@ public class HBaseMicroKernel implements MicroKernel {
     private static final long EPOCH = 1356998400;
     // max number of retries in case of a concurrent modification
     private static final int MAX_RETRIES = 10;
+    // max number of entries in the LRU node cache
+    private static final int MAX_CACHE_ENTRIES = 1000;
 
     private HBaseTableManager tableMgr;
     private Journal journal;
-
+    private NodeCache cache;
     // the machine id associated with this microkernel instance
     private long machineId;
     // the timestamp of the revision id last generated
@@ -77,6 +79,7 @@ public class HBaseMicroKernel implements MicroKernel {
     public HBaseMicroKernel(HBaseAdmin admin, int machineId) throws Exception {
         tableMgr = new HBaseTableManager(admin, HBaseMicroKernelSchema.TABLES);
         journal = new Journal(tableMgr.create(JOURNAL));
+        cache = new NodeCache(MAX_CACHE_ENTRIES);
         if (machineId < 0 || machineId > 65535) {
             throw new IllegalArgumentException("Machine id is out of range");
         }
@@ -625,16 +628,25 @@ public class HBaseMicroKernel implements MicroKernel {
 
     private Map<String, Node> getNodes(Collection<String> paths, Long revisionId)
             throws IOException {
+        // get current head revision if revision id not set
         long revId = revisionId == null ? journal.getHeadRevisionId()
                 : revisionId;
         Map<String, Node> nodes = new TreeMap<String, Node>();
         List<String> pathsToRead = new LinkedList<String>();
         for (String path : paths) {
-            pathsToRead.add(path);
+            Node node = cache.get(revId, path);
+            if (node != null) {
+                nodes.put(path, node);
+            } else {
+                pathsToRead.add(path);
+            }
         }
         // XXX: don't get all revisions
         Map<String, Result> rows = getNodeRows(pathsToRead);
-        nodes.putAll(parseNodes(rows, revId));
+        for (Node node : parseNodes(rows, revId).values()) {
+            cache.put(revId, node);
+            nodes.put(node.getPath(), node);
+        }
         return nodes;
     }
 
