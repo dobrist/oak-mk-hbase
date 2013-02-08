@@ -57,7 +57,7 @@ public class HBaseMicroKernel implements MicroKernel {
     // date instead of the usual unix epoch:
     // 01.01.2013 00:00:00
     // NEVER EVER CHANGE THIS VALUE
-    private static final long EPOCH = 1356998400;
+    public static final long EPOCH = 1356998400;
     // max number of retries in case of a concurrent modification
     private static final int MAX_RETRIES = 10;
     // max number of entries in the LRU node cache

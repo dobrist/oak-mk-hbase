@@ -17,7 +17,11 @@ import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 
 public class Journal {
 
+    // read journal table every so many milliseconds
     private static final int TIMEOUT = 1500;
+    // grace period for long-taking commits of revisions (a commit taking longer
+    // than this amount might not be seen by other microkernels)
+    private static final int GRACE_PERIOD = 200;
 
     private HTable table;
     public LinkedHashSet<Long> revisionIds;
@@ -92,9 +96,18 @@ public class Journal {
 
     private class Updater implements Runnable {
 
+        private Long lastTimeRead;
+
         private void getNewestRevisionIds() throws IOException {
             Scan scan = new Scan();
-            // XXX: don't scan full table every time
+            if (lastTimeRead != null) {
+                // only scan what hasn't been scanned yet (giving potential
+                // long-taking revisions a grace period of GRACE_PERIOD ms)
+                long timestamp = lastTimeRead - HBaseMicroKernel.EPOCH
+                        - GRACE_PERIOD;
+                scan.setStartRow(Bytes.toBytes(timestamp << 24));
+            }
+            lastTimeRead = System.currentTimeMillis();
             ResultScanner scanner = table.getScanner(scan);
             Iterator<Result> iterator = scanner.iterator();
             while (iterator.hasNext()) {
@@ -107,7 +120,9 @@ public class Journal {
                 }
                 long id = Bytes.toLong(result.getRow());
                 synchronized (revisionIds) {
+                    // discard if already present
                     if (!revisionIds.contains(id)) {
+                        // add revision to in-memory journal
                         revisionIds.add(id);
                         headRevisionId = id;
                     }
