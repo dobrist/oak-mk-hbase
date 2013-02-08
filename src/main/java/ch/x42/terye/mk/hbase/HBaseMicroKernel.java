@@ -685,11 +685,9 @@ public class HBaseMicroKernel implements MicroKernel {
         // create node
         String path = NodeTable.rowKeyToPath(row.getRow());
         Node node = new Node(path);
-        // get map and set of columns
-        NavigableMap<byte[], NavigableMap<Long, byte[]>> columnMap = row
-                .getMap().get(NodeTable.CF_DATA.toBytes());
-        Set<Entry<byte[], NavigableMap<Long, byte[]>>> columnSet = columnMap
-                .entrySet();
+        // get the entry set of the column map
+        Set<Entry<byte[], NavigableMap<Long, byte[]>>> columnSet = row
+                .getMap().get(NodeTable.CF_DATA.toBytes()).entrySet();
         // get iterator starting at the end of the list
         ListIterator<Long> iterator = revisionIds.listIterator(revisionIds
                 .size());
@@ -702,15 +700,16 @@ public class HBaseMicroKernel implements MicroKernel {
         }
         // replay revisions top bottom
         while (iterator.hasPrevious()) {
-            long revId = iterator.previous();
+            Long revId = iterator.previous();
             // loop through all columns
             Iterator<Entry<byte[], NavigableMap<Long, byte[]>>> colIterator = columnSet
                     .iterator();
             while (colIterator.hasNext()) {
                 Entry<byte[], NavigableMap<Long, byte[]>> entry = colIterator
                         .next();
-                byte[] column = entry.getKey();
-                byte[] value = columnMap.get(column).get(revId);
+                byte[] colName = entry.getKey();
+                NavigableMap<Long, byte[]> colVersions = entry.getValue();
+                byte[] value = colVersions.get(revId);
                 if (value == null) {
                     // there is no value for the current column at the current
                     // revision, so go to next column
@@ -719,20 +718,20 @@ public class HBaseMicroKernel implements MicroKernel {
                 // we have found a value, thus we are done for this column
                 colIterator.remove();
                 // handle system properties
-                if (column[0] == NodeTable.SYSTEM_PROPERTY_PREFIX) {
-                    if (Arrays.equals(column,
+                if (colName[0] == NodeTable.SYSTEM_PROPERTY_PREFIX) {
+                    if (Arrays.equals(colName,
                             NodeTable.COL_LAST_REVISION.toBytes())) {
                         node.setLastRevision(Bytes.toLong(value));
-                    } else if (Arrays.equals(column,
+                    } else if (Arrays.equals(colName,
                             NodeTable.COL_CHILD_COUNT.toBytes())) {
                         node.setChildCount(Bytes.toLong(value));
                     }
                 }
                 // handle user properties
-                else if (column[0] == NodeTable.DATA_PROPERTY_PREFIX) {
+                else if (colName[0] == NodeTable.DATA_PROPERTY_PREFIX) {
                     // name
-                    byte[] tmp = new byte[column.length - 1];
-                    System.arraycopy(column, 1, tmp, 0, tmp.length);
+                    byte[] tmp = new byte[colName.length - 1];
+                    System.arraycopy(colName, 1, tmp, 0, tmp.length);
                     String name = Bytes.toString(tmp);
                     // value
                     Object val;
