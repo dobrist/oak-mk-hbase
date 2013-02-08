@@ -24,6 +24,8 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.regex.Pattern;
 
+import javax.annotation.Nonnull;
+
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Get;
@@ -320,6 +322,14 @@ public class HBaseMicroKernel implements MicroKernel {
     @Override
     public String merge(String branchRevisionId, String message)
             throws MicroKernelException {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
+    @Override
+    @Nonnull
+    public String rebase(@Nonnull String branchRevisionId,
+            String newBaseRevisionId) throws MicroKernelException {
         // TODO Auto-generated method stub
         return null;
     }
