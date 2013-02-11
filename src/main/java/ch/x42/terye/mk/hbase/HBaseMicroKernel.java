@@ -72,6 +72,8 @@ public class HBaseMicroKernel implements MicroKernel {
     private long lastTimestamp;
     // counter to differentiate revision ids generated within the same second
     private int count;
+    // keep track of revision ids used in last 'parseNodes' call
+    private LinkedList<Long> lastRevisionIds;
 
     /**
      * This constructor can be used to explicitely set the machine id. This is
@@ -213,11 +215,11 @@ public class HBaseMicroKernel implements MicroKernel {
             Update update = new Update();
             new JsopParser(path, jsonDiff, update.getJsopHandler()).parse();
 
-            int tries = MAX_RETRIES;
+            int tries = 0;
             long newRevId;
             Map<String, Node> nodesBefore;
             do {
-                if (--tries < 0) {
+                if (++tries > MAX_RETRIES) {
                     throw new MicroKernelException("Reached retry limit");
                 }
 
@@ -257,7 +259,8 @@ public class HBaseMicroKernel implements MicroKernel {
                 }
 
                 // check for potential concurrent modifications
-                if (verifyUpdate(nodesBefore, update, newRevId)) {
+                // if (verifyUpdate(nodesBefore, update, newRevId)) {
+                if (verifyUpdate(nodesBefore, lastRevisionIds, update, newRevId)) {
                     // commit revision
                     put = new Put(Bytes.toBytes(newRevId));
                     put.add(JournalTable.CF_DATA.toBytes(),
@@ -267,10 +270,10 @@ public class HBaseMicroKernel implements MicroKernel {
                             Bytes.toBytes(newRevId),
                             JournalTable.CF_DATA.toBytes(),
                             JournalTable.COL_ABORT.toBytes(),
-                            Bytes.toBytes(false), put))
+                            Bytes.toBytes(false), put)) {
                         // revision has been committed
                         break;
-                    else {
+                    } else {
                         // our revision has been marked as abort by another
                         // revision, so we roll back
                         rollback(update, newRevId);
@@ -484,65 +487,63 @@ public class HBaseMicroKernel implements MicroKernel {
     }
 
     /**
-     * This method verifies that the update has not conflicted with another
-     * concurrent update.
+     * This method checks if the update has conflicted with another concurrent
+     * update. In this case the microkernel with the smalles revision id passes
+     * while the other revisions get aborted and have to retry
      * 
      * @param nodesBefore the state of the nodes that were written before the
      *            write
+     * @param revisionIds the revision ids used to parse 'nodesBefore'
      * @param update the update to verify
-     * @param revisionId the revision id of the revision the changes were
+     * @param newRevisionId the revision id of the new revision the changes were
      *            written in
      * @throws MicroKernelException if there was a conflicting concurrent update
      */
-    private boolean verifyUpdate(Map<String, Node> nodesBefore, Update update,
-            long revisionId) throws MicroKernelException, IOException {
+    private boolean verifyUpdate(Map<String, Node> nodesBefore,
+            LinkedList<Long> revisionIds, Update update, long newRevisionId)
+            throws MicroKernelException, IOException {
         Map<String, Result> nodesAfter = getNodeRows(update.getModifiedNodes());
         // loop through all nodes we have written
         for (String path : update.getModifiedNodes()) {
             Result after = nodesAfter.get(path);
-            // get "last revision" column
-            NavigableMap<Long, byte[]> lastRevCol = after.getMap()
+            // get all revisions that have written this node
+            Set<Long> lastRevisions = after.getMap()
                     .get(NodeTable.CF_DATA.toBytes())
-                    .get(NodeTable.COL_LAST_REVISION.toBytes());
-            // split column in two parts at our revision
-            NavigableMap<Long, byte[]> lastRevColHead = lastRevCol.headMap(
-                    revisionId, false);
-            NavigableMap<Long, byte[]> lastRevColTail = lastRevCol.tailMap(
-                    revisionId, false);
-            // check that nobody wrote on top of our uncommitted changes
-            if (!lastRevColHead.isEmpty()) {
-                // we try to mark those revisions as abort
-                boolean success = false;
-                for (Long l : lastRevColHead.keySet()) {
-                    Put put = new Put(Bytes.toBytes(l));
-                    put.add(JournalTable.CF_DATA.toBytes(),
-                            JournalTable.COL_ABORT.toBytes(),
-                            Bytes.toBytes(true));
-                    success = tableMgr.get(JOURNAL).checkAndPut(
-                            Bytes.toBytes(l), JournalTable.CF_DATA.toBytes(),
-                            JournalTable.COL_COMMITTED.toBytes(),
-                            Bytes.toBytes(false), put);
+                    .get(NodeTable.COL_LAST_REVISION.toBytes()).keySet();
+            // remove the ones that were known at the time 'beforeNodes' were
+            // read
+            lastRevisions.removeAll(revisionIds);
+            // remove the id of the new revision we're trying to commit
+            lastRevisions.remove(newRevisionId);
+            // if no revision ids are left..
+            if (lastRevisions.isEmpty()) {
+                // ...then nobody came in between and we continue
+                continue;
+            }
+            // check if we're the smallest revision id...
+            for (Long id : lastRevisions) {
+                if (id < newRevisionId) {
+                    // we're no the smallest, thus we yield and retry
+                    return false;
                 }
-                return success;
-            } else {
-                // make sure nobody wrote immediately before we did:
-                // if the node didn't exist before...
-                if (!nodesBefore.containsKey(path)) {
-                    // ...then there should be no revision before ours
-                    if (!lastRevColTail.isEmpty()) {
-                        return false;
-                    }
-                } else {
-                    // ...else the revision before ours must be equal to the one
-                    // of the node read before our write
-                    Node before = nodesBefore.get(path);
-                    if (!lastRevColTail.firstKey().equals(
-                            before.getLastRevision())) {
-                        return false;
-                    }
+            }
+            // we're the smallest, thus we try to mark the other revisions as
+            // abort
+            for (Long id : lastRevisions) {
+                Put put = new Put(Bytes.toBytes(id));
+                put.add(JournalTable.CF_DATA.toBytes(),
+                        JournalTable.COL_ABORT.toBytes(), Bytes.toBytes(true));
+                if (!tableMgr.get(JOURNAL).checkAndPut(Bytes.toBytes(id),
+                        JournalTable.CF_DATA.toBytes(),
+                        JournalTable.COL_COMMITTED.toBytes(),
+                        Bytes.toBytes(false), put)) {
+                    // a revision we tried to mark abort got through, so we stop
+                    // and retry
+                    return false;
                 }
             }
         }
+        // success
         return true;
     }
 
@@ -572,9 +573,6 @@ public class HBaseMicroKernel implements MicroKernel {
         }
         List<Delete> batch = new LinkedList<Delete>(deletes.values());
         tableMgr.get(NODES).delete(batch);
-        // remove journal entry
-        delete = new Delete(Bytes.toBytes(newRevisionId));
-        tableMgr.get(JOURNAL).delete(delete);
     }
 
     private Delete getDelete(String path, long revisionId,
@@ -645,6 +643,7 @@ public class HBaseMicroKernel implements MicroKernel {
             long revisionId) throws IOException {
         Map<String, Node> nodes = new LinkedHashMap<String, Node>();
         LinkedList<Long> revisionIds = journal.getRevisionIds();
+        lastRevisionIds = revisionIds;
         // loop through all node rows
         for (Result row : rows.values()) {
             Node node = parseNode(row, revisionId, revisionIds);

@@ -19,9 +19,10 @@ public class Journal {
 
     // read journal table every so many milliseconds
     private static final int TIMEOUT = 1500;
-    // grace period for long-taking commits of revisions (a commit taking longer
-    // than this amount might not be seen by other microkernels)
-    private static final int GRACE_PERIOD = 200;
+    // grace period for long-taking tries of revisions (a commit, where the
+    // successful try took longer than the grace period might not be seen by
+    // other microkernels)
+    private static final int GRACE_PERIOD = 800;
 
     private HTable table;
     public LinkedHashSet<Long> revisionIds;
