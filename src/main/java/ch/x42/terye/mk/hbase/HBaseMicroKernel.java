@@ -109,31 +109,6 @@ public class HBaseMicroKernel implements MicroKernel {
         }
     }
 
-    /**
-     * Disposes of the resources used by the microkernel internally. Multiple
-     * microkernels can execute this method at the same time, however this
-     * method does not close the HBase resources. Use dispose(boolean, boolean)
-     * for more control.
-     */
-    public void dispose() throws IOException {
-        dispose(false, false);
-    }
-
-    public void dispose(boolean dropTables, boolean closeHBaseResources)
-            throws IOException {
-        journal.dispose();
-        if (dropTables) {
-            try {
-                tableMgr.dropAllTables();
-            } catch (TableNotFoundException e) {
-                // nothing to do
-            }
-        }
-        if (closeHBaseResources) {
-            tableMgr.dispose();
-        }
-    }
-
     @Override
     public String getHeadRevision() throws MicroKernelException {
         return String.valueOf(journal.getHeadRevisionId());
@@ -686,8 +661,8 @@ public class HBaseMicroKernel implements MicroKernel {
         String path = NodeTable.rowKeyToPath(row.getRow());
         Node node = new Node(path);
         // get the entry set of the column map
-        Set<Entry<byte[], NavigableMap<Long, byte[]>>> columnSet = row
-                .getMap().get(NodeTable.CF_DATA.toBytes()).entrySet();
+        Set<Entry<byte[], NavigableMap<Long, byte[]>>> columnSet = row.getMap()
+                .get(NodeTable.CF_DATA.toBytes()).entrySet();
         // get iterator starting at the end of the list
         ListIterator<Long> iterator = revisionIds.listIterator(revisionIds
                 .size());
@@ -753,6 +728,30 @@ public class HBaseMicroKernel implements MicroKernel {
             }
         }
         return node;
+    }
+
+    /**
+     * Disposes all of the resources used by this microkernel instance.
+     */
+    public void dispose() throws IOException {
+        dispose(false);
+    }
+
+    /**
+     * Disposes all of the resources and optionally drops all tables used by
+     * this microkernel instance.
+     */
+    public void dispose(boolean dropTables) throws IOException {
+        journal.dispose();
+        cache.clear();
+        if (dropTables) {
+            try {
+                tableMgr.dropAllTables();
+            } catch (TableNotFoundException e) {
+                // nothing to do
+            }
+        }
+        tableMgr.dispose();
     }
 
 }

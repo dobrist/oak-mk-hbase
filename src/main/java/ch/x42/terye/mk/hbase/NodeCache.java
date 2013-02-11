@@ -38,4 +38,8 @@ public class NodeCache {
         cache.put(key, node);
     }
 
+    public void clear() {
+        cache.clear();
+    }
+
 }
