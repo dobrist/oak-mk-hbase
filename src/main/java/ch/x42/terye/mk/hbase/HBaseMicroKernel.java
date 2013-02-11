@@ -59,7 +59,7 @@ public class HBaseMicroKernel implements MicroKernel {
     // NEVER EVER CHANGE THIS VALUE
     public static final long EPOCH = 1356998400;
     // max number of retries in case of a concurrent modification
-    private static final int MAX_RETRIES = 10;
+    private static final int MAX_RETRIES = 100;
     // max number of entries in the LRU node cache
     private static final int MAX_CACHE_ENTRIES = 1000;
 
