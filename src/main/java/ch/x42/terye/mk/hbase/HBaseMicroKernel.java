@@ -243,9 +243,10 @@ public class HBaseMicroKernel implements MicroKernel {
                         JournalTable.COL_ABORT.toBytes(), Bytes.toBytes(false));
                 tableMgr.get(JOURNAL).put(put);
 
-                // update journal in order to have the newest possible versions
-                // of the node we read before our write
-                journal.update();
+                // update journal on first retry
+                if (tries > 1) {
+                    journal.update();
+                }
                 LinkedList<Long> journal = this.journal.getJournal();
 
                 // read nodes that are to be written
