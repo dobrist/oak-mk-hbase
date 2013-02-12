@@ -12,6 +12,7 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.jackrabbit.mk.api.MicroKernelException;
 
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 
@@ -25,7 +26,7 @@ public class Journal {
     private static final int GRACE_PERIOD = 800;
 
     private HTable table;
-    public LinkedHashSet<Long> revisionIds;
+    public LinkedHashSet<Long> journal;
     private long headRevisionId;
 
     private Thread thread;
@@ -35,15 +36,14 @@ public class Journal {
 
     public Journal(HTable table) throws IOException {
         this.table = table;
-        this.revisionIds = new LinkedHashSet<Long>();
-        this.revisionIds.add(0L);
-        this.headRevisionId = 0L;
+        this.journal = new LinkedHashSet<Long>();
+        this.journal.add(0L);
         this.timeoutLock = new Object();
         this.updateLock = new Object();
 
         // start update thread
         Updater updater = new Updater();
-        updater.getNewestRevisionIds();
+        updater.updateJournal();
         thread = new Thread(updater);
         thread.setDaemon(true);
         thread.start();
@@ -63,20 +63,49 @@ public class Journal {
     }
 
     public long getHeadRevisionId() {
-        synchronized (revisionIds) {
+        synchronized (journal) {
             return headRevisionId;
         }
     }
 
-    public LinkedList<Long> getRevisionIds() {
-        synchronized (revisionIds) {
-            return new LinkedList<Long>(revisionIds);
+    /**
+     * Returns the complete journal.
+     */
+    public LinkedList<Long> getJournal() {
+        synchronized (journal) {
+            return new LinkedList<Long>(journal);
         }
     }
 
+    /**
+     * Returns the journal up to and including the specified revision id.
+     * 
+     * @param revisionId a revision id
+     * @return the journal up to and including the specified revision id
+     * @throws MicroKernelException when specified revision id is not present in
+     *             journal
+     */
+    public LinkedList<Long> getJournal(long revisionId) {
+        LinkedList<Long> revisionIds = getJournal();
+        boolean found = false;
+        Iterator<Long> iterator = revisionIds.iterator();
+        while (iterator.hasNext()) {
+            if (iterator.next() == revisionId) {
+                found = true;
+            } else if (found) {
+                iterator.remove();
+            }
+        }
+        if (!found) {
+            throw new MicroKernelException("Could not find revision id "
+                    + revisionId);
+        }
+        return revisionIds;
+    }
+
     public void addRevisionId(long revisionId) {
-        synchronized (revisionIds) {
-            revisionIds.add(revisionId);
+        synchronized (journal) {
+            journal.add(revisionId);
             headRevisionId = revisionId;
         }
     }
@@ -99,7 +128,7 @@ public class Journal {
 
         private Long lastTimeRead;
 
-        private void getNewestRevisionIds() throws IOException {
+        private void updateJournal() throws IOException {
             Scan scan = new Scan();
             if (lastTimeRead != null) {
                 // only scan what hasn't been scanned yet (giving potential
@@ -120,11 +149,11 @@ public class Journal {
                     continue;
                 }
                 long id = Bytes.toLong(result.getRow());
-                synchronized (revisionIds) {
+                synchronized (journal) {
                     // discard if already present
-                    if (!revisionIds.contains(id)) {
-                        // add revision to in-memory journal
-                        revisionIds.add(id);
+                    if (!journal.contains(id)) {
+                        // add revision to journal
+                        journal.add(id);
                         headRevisionId = id;
                     }
                 }
@@ -136,7 +165,7 @@ public class Journal {
         public void run() {
             while (!done) {
                 try {
-                    getNewestRevisionIds();
+                    updateJournal();
                     synchronized (updateLock) {
                         updateLock.notify();
                     }

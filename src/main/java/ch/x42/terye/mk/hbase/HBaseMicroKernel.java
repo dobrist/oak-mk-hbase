@@ -9,6 +9,7 @@ import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -72,8 +73,6 @@ public class HBaseMicroKernel implements MicroKernel {
     private long lastTimestamp;
     // counter to differentiate revision ids generated within the same second
     private int count;
-    // keep track of revision ids used in last 'parseNodes' call
-    private LinkedList<Long> lastRevisionIds;
 
     /**
      * This constructor can be used to explicitely set the machine id. This is
@@ -163,20 +162,29 @@ public class HBaseMicroKernel implements MicroKernel {
             long offset, int maxChildNodes, String filter)
             throws MicroKernelException {
         try {
-            // parse revision id
-            long revId = journal.getHeadRevisionId();
+            long revId;
             if (revisionId != null) {
+                // parse revision id
                 try {
                     revId = Long.parseLong(revisionId);
                 } catch (NumberFormatException e) {
                     throw new IllegalArgumentException("Invalid revision id: "
                             + revisionId);
                 }
+            } else {
+                // use current head revision id
+                revId = journal.getHeadRevisionId();
             }
+
+            // get journal
+            LinkedList<Long> journal = this.journal.getJournal(revId);
 
             // do a filtered prefix scan:
             Scan scan = new Scan();
+            // get all versions of the columns
             scan.setMaxVersions();
+            // set time range according to the journal
+            scan.setTimeRange(0L, Collections.max(journal) + 1);
             // compute scan range
             String prefix = path
                     + (path.charAt(path.length() - 1) == '/' ? "" : "/");
@@ -200,7 +208,7 @@ public class HBaseMicroKernel implements MicroKernel {
             scanner.close();
 
             // parse nodes, create tree, build and return JSON
-            Map<String, Node> nodes = parseNodes(rows, revId);
+            Map<String, Node> nodes = parseNodes(rows, journal);
             return Node.toJson(Node.toTree(nodes), depth);
         } catch (Exception e) {
             throw new MicroKernelException("Error while getting nodes", e);
@@ -238,9 +246,10 @@ public class HBaseMicroKernel implements MicroKernel {
                 // update journal in order to have the newest possible versions
                 // of the node we read before our write
                 journal.update();
+                LinkedList<Long> journal = this.journal.getJournal();
 
                 // read nodes that are to be written
-                nodesBefore = getNodes(update.getModifiedNodes(), null);
+                nodesBefore = getNodes(update.getModifiedNodes(), journal);
 
                 // make sure the update is valid
                 validateUpdate(nodesBefore, update);
@@ -260,7 +269,7 @@ public class HBaseMicroKernel implements MicroKernel {
 
                 // check for potential concurrent modifications
                 // if (verifyUpdate(nodesBefore, update, newRevId)) {
-                if (verifyUpdate(nodesBefore, lastRevisionIds, update, newRevId)) {
+                if (verifyUpdate(nodesBefore, journal, update, newRevId)) {
                     // commit revision
                     put = new Put(Bytes.toBytes(newRevId));
                     put.add(JournalTable.CF_DATA.toBytes(),
@@ -284,7 +293,7 @@ public class HBaseMicroKernel implements MicroKernel {
                 rollback(update, newRevId);
             } while (true);
 
-            journal.addRevisionId(newRevId);
+            this.journal.addRevisionId(newRevId);
             return String.valueOf(newRevId);
         } catch (Exception e) {
             throw new MicroKernelException("Commit failed", e);
@@ -502,7 +511,8 @@ public class HBaseMicroKernel implements MicroKernel {
     private boolean verifyUpdate(Map<String, Node> nodesBefore,
             LinkedList<Long> revisionIds, Update update, long newRevisionId)
             throws MicroKernelException, IOException {
-        Map<String, Result> nodesAfter = getNodeRows(update.getModifiedNodes());
+        Map<String, Result> nodesAfter = getNodeRows(update.getModifiedNodes(),
+                null);
         // loop through all nodes we have written
         for (String path : update.getModifiedNodes()) {
             Result after = nodesAfter.get(path);
@@ -588,15 +598,19 @@ public class HBaseMicroKernel implements MicroKernel {
 
     /* helper methods for reading the node table */
 
-    private Map<String, Result> getNodeRows(Collection<String> paths)
-            throws IOException {
+    private Map<String, Result> getNodeRows(Collection<String> paths,
+            LinkedList<Long> journal) throws IOException {
         Map<String, Result> nodes = new LinkedHashMap<String, Result>();
         if (paths.isEmpty()) {
             return nodes;
         }
         List<Get> batch = new LinkedList<Get>();
+        Long max = journal == null ? null : Collections.max(journal);
         for (String path : paths) {
             Get get = new Get(NodeTable.pathToRowKey(path));
+            if (max != null) {
+                get.setTimeRange(0L, max + 1);
+            }
             get.setMaxVersions();
             batch.add(get);
         }
@@ -609,11 +623,9 @@ public class HBaseMicroKernel implements MicroKernel {
         return nodes;
     }
 
-    private Map<String, Node> getNodes(Collection<String> paths, Long revisionId)
-            throws IOException {
-        // get current head revision if revision id not set
-        long revId = revisionId == null ? journal.getHeadRevisionId()
-                : revisionId;
+    private Map<String, Node> getNodes(Collection<String> paths,
+            LinkedList<Long> journal) throws IOException {
+        long revId = journal.getLast();
         Map<String, Node> nodes = new TreeMap<String, Node>();
         List<String> pathsToRead = new LinkedList<String>();
         for (String path : paths) {
@@ -624,9 +636,8 @@ public class HBaseMicroKernel implements MicroKernel {
                 pathsToRead.add(path);
             }
         }
-        // XXX: don't get all revisions
-        Map<String, Result> rows = getNodeRows(pathsToRead);
-        for (Node node : parseNodes(rows, revId).values()) {
+        Map<String, Result> rows = getNodeRows(pathsToRead, journal);
+        for (Node node : parseNodes(rows, journal).values()) {
             cache.put(revId, node);
             nodes.put(node.getPath(), node);
         }
@@ -640,13 +651,11 @@ public class HBaseMicroKernel implements MicroKernel {
      * @return a map mapping paths to the corresponding node
      */
     private Map<String, Node> parseNodes(Map<String, Result> rows,
-            long revisionId) throws IOException {
+            LinkedList<Long> journal) throws IOException {
         Map<String, Node> nodes = new LinkedHashMap<String, Node>();
-        LinkedList<Long> revisionIds = journal.getRevisionIds();
-        lastRevisionIds = revisionIds;
         // loop through all node rows
         for (Result row : rows.values()) {
-            Node node = parseNode(row, revisionId, revisionIds);
+            Node node = parseNode(row, journal);
             if (node != null) {
                 nodes.put(node.getPath(), node);
             }
@@ -654,24 +663,15 @@ public class HBaseMicroKernel implements MicroKernel {
         return nodes;
     }
 
-    private Node parseNode(Result row, long revisionId,
-            LinkedList<Long> revisionIds) {
+    private Node parseNode(Result row, LinkedList<Long> journal) {
         // create node
         String path = NodeTable.rowKeyToPath(row.getRow());
-        Node node = new Node(path);
+        Node node = null;
         // get the entry set of the column map
         Set<Entry<byte[], NavigableMap<Long, byte[]>>> columnSet = row.getMap()
                 .get(NodeTable.CF_DATA.toBytes()).entrySet();
-        // get iterator starting at the end of the list
-        ListIterator<Long> iterator = revisionIds.listIterator(revisionIds
-                .size());
-        // skip revision ids that might have been added after 'revisionId'
-        while (iterator.hasPrevious()) {
-            if (iterator.previous() == revisionId) {
-                iterator.next();
-                break;
-            }
-        }
+        // get iterator starting at the end of the journal
+        ListIterator<Long> iterator = journal.listIterator(journal.size());
         // replay revisions top bottom
         while (iterator.hasPrevious()) {
             Long revId = iterator.previous();
@@ -691,6 +691,10 @@ public class HBaseMicroKernel implements MicroKernel {
                 }
                 // we have found a value, thus we are done for this column
                 colIterator.remove();
+                // create node if it hasn't been created yet
+                if (node == null) {
+                    node = new Node(path);
+                }
                 // handle system properties
                 if (colName[0] == NodeTable.SYSTEM_PROPERTY_PREFIX) {
                     if (Arrays.equals(colName,
