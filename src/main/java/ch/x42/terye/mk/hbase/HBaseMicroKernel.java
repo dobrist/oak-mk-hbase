@@ -147,24 +147,29 @@ public class HBaseMicroKernel implements MicroKernel {
     public boolean nodeExists(String path, String revisionId)
             throws MicroKernelException {
         try {
-            // get journal
-            long revId = getRevisionId(revisionId);
-            LinkedList<Long> journal = this.journal.getJournal(revId);
-            // read node
-            List<String> paths = new LinkedList<String>();
-            paths.add(path);
-            Map<String, Node> nodes = getNodes(paths, journal);
-            return !nodes.isEmpty();
+            return getNode(path, revisionId) != null;
         } catch (IOException e) {
-            throw new MicroKernelException("Error reading node " + path, e);
+            throw new MicroKernelException("Error testing existence of node "
+                    + path, e);
         }
     }
 
     @Override
     public long getChildNodeCount(String path, String revisionId)
             throws MicroKernelException {
-        // TODO Auto-generated method stub
-        return 0;
+        try {
+            Node node = getNode(path, revisionId);
+            if (node == null) {
+                String s = revisionId == null ? "head revision" : "revision "
+                        + revisionId;
+                throw new MicroKernelException("Node " + path
+                        + " doesn't exist in " + s);
+            }
+            return node.getChildCount();
+        } catch (IOException e) {
+            throw new MicroKernelException("Error getting child count of node "
+                    + path, e);
+        }
     }
 
     @Override
@@ -708,6 +713,16 @@ public class HBaseMicroKernel implements MicroKernel {
             nodes.put(node.getPath(), node);
         }
         return nodes;
+    }
+
+    private Node getNode(String path, String revisionId) throws IOException {
+        // get journal
+        long revId = getRevisionId(revisionId);
+        LinkedList<Long> journal = this.journal.getJournal(revId);
+        // read and return node
+        List<String> paths = new LinkedList<String>();
+        paths.add(path);
+        return getNodes(paths, journal).get(path);
     }
 
     /**

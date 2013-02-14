@@ -97,8 +97,7 @@ public class Journal {
             }
         }
         if (!found) {
-            throw new MicroKernelException("Could not find revision id "
-                    + revisionId);
+            throw new MicroKernelException("Unknown revision id " + revisionId);
         }
         return revisionIds;
     }
