@@ -449,17 +449,18 @@ public class HBaseMicroKernel implements MicroKernel {
      */
     private void validateUpdate(Map<String, Node> nodesBefore, Update update)
             throws MicroKernelException {
-        // assemble nodes that already exits or have been added in this update
+        // assemble nodes that already exist or have been added in this update
         Set<String> nodes = new HashSet<String>();
         nodes.addAll(nodesBefore.keySet());
         nodes.addAll(update.getAddedNodes());
-        // verify that all the nodes to be added have a valid parent
+        // verify that all the nodes to be added have a valid parent...
         for (String path : update.getAddedNodes()) {
             String parentPath = PathUtils.getParentPath(path);
             if (!nodes.contains(parentPath)) {
                 throw new MicroKernelException("Cannot add node " + path
                         + ": parent doesn't exist");
             }
+            // ...and don't exist yet
             if (nodesBefore.containsKey(path)) {
                 throw new MicroKernelException("Cannot add node " + path
                         + ": node already exists");
@@ -470,6 +471,14 @@ public class HBaseMicroKernel implements MicroKernel {
             if (!nodes.contains(path)) {
                 throw new MicroKernelException("Cannot delete " + path
                         + ": node doesn't exist");
+            }
+        }
+        // verify that properties to be set have a valid parent
+        for (String path : update.getSetProperties().keySet()) {
+            String parentPath = PathUtils.getParentPath(path);
+            if (!nodes.contains(parentPath)) {
+                throw new MicroKernelException("Cannot set property " + path
+                        + ": parent doesn't exist");
             }
         }
     }
