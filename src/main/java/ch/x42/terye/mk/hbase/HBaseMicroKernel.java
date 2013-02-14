@@ -406,19 +406,27 @@ public class HBaseMicroKernel implements MicroKernel {
      */
     private void validateUpdate(Map<String, Node> nodesBefore, Update update)
             throws MicroKernelException {
-        Set<String> parents = new HashSet<String>();
-        parents.addAll(nodesBefore.keySet());
-        parents.addAll(update.getAddedNodes());
+        // assemble nodes that already exits or have been added in this update
+        Set<String> nodes = new HashSet<String>();
+        nodes.addAll(nodesBefore.keySet());
+        nodes.addAll(update.getAddedNodes());
         // verify that all the nodes to be added have a valid parent
         for (String path : update.getAddedNodes()) {
             String parentPath = PathUtils.getParentPath(path);
-            if (!parents.contains(parentPath)) {
+            if (!nodes.contains(parentPath)) {
                 throw new MicroKernelException("Cannot add node " + path
                         + ": parent doesn't exist");
             }
             if (nodesBefore.containsKey(path)) {
                 throw new MicroKernelException("Cannot add node " + path
                         + ": node already exists");
+            }
+        }
+        // verify that all the nodes to be deleted exist
+        for (String path : update.getDeletedNodes()) {
+            if (!nodes.contains(path)) {
+                throw new MicroKernelException("Cannot delete " + path
+                        + ": node doesn't exist");
             }
         }
     }
@@ -430,10 +438,22 @@ public class HBaseMicroKernel implements MicroKernel {
         // - added nodes
         for (String node : update.getAddedNodes()) {
             put = getPut(node, newRevisionId, puts);
+            // don't mark as deleted
+            put.add(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_DELETED.toBytes(), newRevisionId,
+                    Bytes.toBytes(false));
             // child count
             put.add(NodeTable.CF_DATA.toBytes(),
                     NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId,
                     Bytes.toBytes(0L));
+        }
+        // - deleted nodes
+        for (String node : update.getDeletedNodes()) {
+            put = getPut(node, newRevisionId, puts);
+            // mark as deleted
+            put.add(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_DELETED.toBytes(), newRevisionId,
+                    Bytes.toBytes(true));
         }
         // - changed child counts
         for (Entry<String, Long> entry : update.getChangedChildCounts()
@@ -709,7 +729,11 @@ public class HBaseMicroKernel implements MicroKernel {
                 }
                 // handle system properties
                 if (colName[0] == NodeTable.SYSTEM_PROPERTY_PREFIX) {
-                    if (Arrays.equals(colName,
+                    if (Arrays.equals(colName, NodeTable.COL_DELETED.toBytes())
+                            && Arrays.equals(value, Bytes.toBytes(true))) {
+                        // node is marked as deleted
+                        return null;
+                    } else if (Arrays.equals(colName,
                             NodeTable.COL_LAST_REVISION.toBytes())) {
                         node.setLastRevision(Bytes.toLong(value));
                     } else if (Arrays.equals(colName,

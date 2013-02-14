@@ -15,9 +15,7 @@ public class Update {
 
         @Override
         public void nodeAdded(String parentPath, String name) {
-            String path = PathUtils.concat(parentPath, name);
-            addNode(path);
-            changeChildCount(parentPath, true);
+            addNode(PathUtils.concat(parentPath, name));
         }
 
         @Override
@@ -26,16 +24,23 @@ public class Update {
             setProperty(PathUtils.concat(path, key), value);
         }
 
+        @Override
+        public void nodeRemoved(String parentPath, String name) {
+            deleteNode(PathUtils.concat(parentPath, name));
+        }
+
     }
 
     private Set<String> modifiedNodes;
     private Set<String> addedNodes;
+    private Set<String> deletedNodes;
     private Map<String, Long> changedChildCounts;
     private Map<String, Object> setProperties;
 
     public Update() {
         modifiedNodes = new TreeSet<String>();
         addedNodes = new TreeSet<String>();
+        deletedNodes = new TreeSet<String>();
         changedChildCounts = new LinkedHashMap<String, Long>();
         setProperties = new HashMap<String, Object>();
     }
@@ -47,9 +52,10 @@ public class Update {
     public void addNode(String path) {
         addedNodes.add(path);
         modifiedNodes.add(path);
+        changeChildCount(PathUtils.getParentPath(path), true);
     }
 
-    public void changeChildCount(String path, boolean increment) {
+    private void changeChildCount(String path, boolean increment) {
         if (!changedChildCounts.containsKey(path)) {
             changedChildCounts.put(path, 0L);
         }
@@ -67,12 +73,22 @@ public class Update {
         modifiedNodes.add(PathUtils.getParentPath(path));
     }
 
+    public void deleteNode(String path) {
+        deletedNodes.add(path);
+        modifiedNodes.add(path);
+        changeChildCount(PathUtils.getParentPath(path), false);
+    }
+
     public Set<String> getModifiedNodes() {
         return modifiedNodes;
     }
 
     public Set<String> getAddedNodes() {
         return addedNodes;
+    }
+
+    public Set<String> getDeletedNodes() {
+        return deletedNodes;
     }
 
     public Map<String, Long> getChangedChildCounts() {

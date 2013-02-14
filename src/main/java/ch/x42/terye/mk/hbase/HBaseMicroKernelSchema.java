@@ -28,17 +28,19 @@ public class HBaseMicroKernelSchema {
         public static final byte SYSTEM_PROPERTY_PREFIX = (byte) 0;
         public static final byte DATA_PROPERTY_PREFIX = (byte) 1;
 
-        // delete marker
-        public static final byte[] DELETE_MARKER = new byte[] {
-            (byte) 0
-        };
-
         // data type prefixes
         public static final byte TYPE_STRING_PREFIX = (byte) 1;
         public static final byte TYPE_LONG_PREFIX = (byte) 2;
         public static final byte TYPE_BOOLEAN_PREFIX = (byte) 3;
 
+        // delete marker
+        public static final byte[] DELETE_MARKER = new byte[] {
+            (byte) 0
+        };
+
         // columns
+        public static final Qualifier COL_DELETED = new Qualifier(
+                SYSTEM_PROPERTY_PREFIX, "deleted");
         public static final Qualifier COL_LAST_REVISION = new Qualifier(
                 SYSTEM_PROPERTY_PREFIX, "lastRevision");
         public static final Qualifier COL_CHILD_COUNT = new Qualifier(
@@ -51,6 +53,8 @@ public class HBaseMicroKernelSchema {
             long revId = 0L;
             byte[] rowKey = Bytes.toBytes("/");
             KeyValue[] row = {
+                    new KeyValue(rowKey, CF_DATA.toBytes(),
+                            COL_DELETED.toBytes(), revId, Bytes.toBytes(false)),
                     new KeyValue(rowKey, CF_DATA.toBytes(),
                             COL_LAST_REVISION.toBytes(), revId,
                             Bytes.toBytes(revId)),
