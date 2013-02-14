@@ -146,8 +146,18 @@ public class HBaseMicroKernel implements MicroKernel {
     @Override
     public boolean nodeExists(String path, String revisionId)
             throws MicroKernelException {
-        // TODO Auto-generated method stub
-        return false;
+        try {
+            // get journal
+            long revId = getRevisionId(revisionId);
+            LinkedList<Long> journal = this.journal.getJournal(revId);
+            // read node
+            List<String> paths = new LinkedList<String>();
+            paths.add(path);
+            Map<String, Node> nodes = getNodes(paths, journal);
+            return !nodes.isEmpty();
+        } catch (IOException e) {
+            throw new MicroKernelException("Error reading node " + path, e);
+        }
     }
 
     @Override
@@ -162,21 +172,8 @@ public class HBaseMicroKernel implements MicroKernel {
             long offset, int maxChildNodes, String filter)
             throws MicroKernelException {
         try {
-            long revId;
-            if (revisionId != null) {
-                // parse revision id
-                try {
-                    revId = Long.parseLong(revisionId);
-                } catch (NumberFormatException e) {
-                    throw new IllegalArgumentException("Invalid revision id: "
-                            + revisionId);
-                }
-            } else {
-                // use current head revision id
-                revId = journal.getHeadRevisionId();
-            }
-
             // get journal
+            long revId = getRevisionId(revisionId);
             LinkedList<Long> journal = this.journal.getJournal(revId);
 
             // do a filtered prefix scan:
@@ -246,6 +243,9 @@ public class HBaseMicroKernel implements MicroKernel {
                         Bytes.toBytes(false));
                 put.add(JournalTable.CF_DATA.toBytes(),
                         JournalTable.COL_ABORT.toBytes(), Bytes.toBytes(false));
+                put.add(JournalTable.CF_DATA.toBytes(),
+                        JournalTable.COL_MESSAGE.toBytes(),
+                        Bytes.toBytes(message));
                 tableMgr.get(JOURNAL).put(put);
 
                 // update journal on first retry
@@ -355,6 +355,31 @@ public class HBaseMicroKernel implements MicroKernel {
     }
 
     /* private methods */
+
+    /**
+     * Parses and returns the specified revision id. If the parameter is null,
+     * the method returns the current head revision id.
+     * 
+     * @param revisionId the revision id to be parsed or null for getting the
+     *            current head revision id
+     * @return the parse revision id or the current head revision id
+     */
+    private long getRevisionId(String revisionId) {
+        long revId;
+        if (revisionId != null) {
+            // parse revision id
+            try {
+                revId = Long.parseLong(revisionId);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid revision id: "
+                        + revisionId);
+            }
+        } else {
+            // use current head revision id
+            revId = journal.getHeadRevisionId();
+        }
+        return revId;
+    }
 
     /* helper methods for commit */
 

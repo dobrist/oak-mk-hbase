@@ -99,6 +99,7 @@ public class HBaseMicroKernelSchema {
         // columns
         public static final Qualifier COL_COMMITTED = new Qualifier("committed");
         public static final Qualifier COL_ABORT = new Qualifier("abort");
+        public static final Qualifier COL_MESSAGE = new Qualifier("message");
 
         // initial content
         private static final List<KeyValue[]> ROWS = new LinkedList<KeyValue[]>();
@@ -109,7 +110,10 @@ public class HBaseMicroKernelSchema {
                     new KeyValue(rowKey, CF_DATA.toBytes(),
                             COL_COMMITTED.toBytes(), Bytes.toBytes(true)),
                     new KeyValue(rowKey, CF_DATA.toBytes(),
-                            COL_ABORT.toBytes(), Bytes.toBytes(false))
+                            COL_ABORT.toBytes(), Bytes.toBytes(false)),
+                    new KeyValue(rowKey, CF_DATA.toBytes(),
+                            COL_MESSAGE.toBytes(),
+                            Bytes.toBytes("Initial revision"))
             };
             ROWS.add(row);
         };
