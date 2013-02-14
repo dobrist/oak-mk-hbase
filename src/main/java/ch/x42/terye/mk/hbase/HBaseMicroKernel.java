@@ -456,26 +456,33 @@ public class HBaseMicroKernel implements MicroKernel {
             String parentPath = PathUtils.getParentPath(entry.getKey());
             String name = PathUtils.getName(entry.getKey());
             Object value = entry.getValue();
-            byte typePrefix;
-            byte[] tmp;
-            if (value instanceof String) {
-                typePrefix = NodeTable.TYPE_STRING_PREFIX;
-                tmp = Bytes.toBytes((String) value);
-            } else if (value instanceof Number) {
-                typePrefix = NodeTable.TYPE_LONG_PREFIX;
-                tmp = Bytes.toBytes(((Number) value).longValue());
-            } else if (value instanceof Boolean) {
-                typePrefix = NodeTable.TYPE_BOOLEAN_PREFIX;
-                tmp = Bytes.toBytes((Boolean) value);
+            byte[] bytes;
+            if (value == null) {
+                // mark property as deleted
+                bytes = NodeTable.DELETE_MARKER;
             } else {
-                throw new MicroKernelException("Property " + entry.getKey()
-                        + " has unknown type " + value.getClass());
+                // convert value to bytes
+                byte typePrefix;
+                byte[] tmp;
+                if (value instanceof String) {
+                    typePrefix = NodeTable.TYPE_STRING_PREFIX;
+                    tmp = Bytes.toBytes((String) value);
+                } else if (value instanceof Number) {
+                    typePrefix = NodeTable.TYPE_LONG_PREFIX;
+                    tmp = Bytes.toBytes(((Number) value).longValue());
+                } else if (value instanceof Boolean) {
+                    typePrefix = NodeTable.TYPE_BOOLEAN_PREFIX;
+                    tmp = Bytes.toBytes((Boolean) value);
+                } else {
+                    throw new MicroKernelException("Property " + entry.getKey()
+                            + " has unknown type " + value.getClass());
+                }
+                bytes = new byte[tmp.length + 1];
+                bytes[0] = typePrefix;
+                System.arraycopy(tmp, 0, bytes, 1, tmp.length);
             }
             put = getPut(parentPath, newRevisionId, puts);
             Qualifier q = new Qualifier(NodeTable.DATA_PROPERTY_PREFIX, name);
-            byte[] bytes = new byte[tmp.length + 1];
-            bytes[0] = typePrefix;
-            System.arraycopy(tmp, 0, bytes, 1, tmp.length);
             put.add(NodeTable.CF_DATA.toBytes(), q.toBytes(), newRevisionId,
                     bytes);
         }
@@ -692,6 +699,10 @@ public class HBaseMicroKernel implements MicroKernel {
                 }
                 // we have found a value, thus we are done for this column
                 colIterator.remove();
+                // check if this column has been marked deleted
+                if (Arrays.equals(value, NodeTable.DELETE_MARKER)) {
+                    continue;
+                }
                 // create node if it hasn't been created yet
                 if (node == null) {
                     node = new Node(path);

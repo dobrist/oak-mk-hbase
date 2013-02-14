@@ -28,10 +28,15 @@ public class HBaseMicroKernelSchema {
         public static final byte SYSTEM_PROPERTY_PREFIX = (byte) 0;
         public static final byte DATA_PROPERTY_PREFIX = (byte) 1;
 
+        // delete marker
+        public static final byte[] DELETE_MARKER = new byte[] {
+            (byte) 0
+        };
+
         // data type prefixes
-        public static final byte TYPE_STRING_PREFIX = (byte) 0;
-        public static final byte TYPE_LONG_PREFIX = (byte) 1;
-        public static final byte TYPE_BOOLEAN_PREFIX = (byte) 2;
+        public static final byte TYPE_STRING_PREFIX = (byte) 1;
+        public static final byte TYPE_LONG_PREFIX = (byte) 2;
+        public static final byte TYPE_BOOLEAN_PREFIX = (byte) 3;
 
         // columns
         public static final Qualifier COL_LAST_REVISION = new Qualifier(
