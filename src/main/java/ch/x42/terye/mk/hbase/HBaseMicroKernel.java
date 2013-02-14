@@ -207,8 +207,12 @@ public class HBaseMicroKernel implements MicroKernel {
             }
             scanner.close();
 
-            // parse nodes, create tree, build and return JSON
+            // parse nodes
             Map<String, Node> nodes = parseNodes(rows, journal);
+            if (nodes.isEmpty()) {
+                return null;
+            }
+            // create tree, build and return JSON
             return Node.toJson(Node.toTree(nodes), depth);
         } catch (Exception e) {
             throw new MicroKernelException("Error while getting nodes", e);
