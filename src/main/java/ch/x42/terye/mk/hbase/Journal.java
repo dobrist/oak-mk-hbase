@@ -23,7 +23,7 @@ public class Journal {
     // grace period for long-taking tries of revisions (a commit, where the
     // successful try took longer than the grace period might not be seen by
     // other microkernels)
-    private static final int GRACE_PERIOD = 800;
+    public static final int GRACE_PERIOD = 800;
 
     private HTable table;
     public LinkedHashSet<Long> journal;

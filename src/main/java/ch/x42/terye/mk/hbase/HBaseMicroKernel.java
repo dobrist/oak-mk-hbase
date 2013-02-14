@@ -236,6 +236,7 @@ public class HBaseMicroKernel implements MicroKernel {
                 }
 
                 // generate new revision id
+                long start = System.currentTimeMillis();
                 newRevId = generateNewRevisionId();
 
                 // write journal entry for this revision
@@ -275,6 +276,14 @@ public class HBaseMicroKernel implements MicroKernel {
                 // check for potential concurrent modifications
                 // if (verifyUpdate(nodesBefore, update, newRevId)) {
                 if (verifyUpdate(nodesBefore, journal, update, newRevId)) {
+                    // before committing, check if the execution time of this
+                    // try is within the bounds of the grace period defined in
+                    // the journal
+                    if (System.currentTimeMillis() - start + 50 > Journal.GRACE_PERIOD) {
+                        // rollback as a safety measure
+                        rollback(update, newRevId);
+                        continue;
+                    }
                     // commit revision
                     put = new Put(Bytes.toBytes(newRevId));
                     put.add(JournalTable.CF_DATA.toBytes(),
