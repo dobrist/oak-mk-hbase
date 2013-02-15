@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
+import java.util.List;
 
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.TableNotFoundException;
@@ -28,18 +29,23 @@ public class Journal {
     private HTable table;
     public LinkedHashSet<Long> journal;
     private long headRevisionId;
+    private List<Long> newRevisionIds;
 
     private Thread thread;
     private boolean done = false;
-    private Object timeoutLock;
-    private Object updateLock;
+    private Object timeoutMonitor;
+    private Object updateMonitor;
+    private boolean locked;
 
     public Journal(HTable table) throws IOException {
         this.table = table;
-        this.journal = new LinkedHashSet<Long>();
-        this.journal.add(0L);
-        this.timeoutLock = new Object();
-        this.updateLock = new Object();
+        journal = new LinkedHashSet<Long>();
+        journal.add(0L);
+        headRevisionId = 0L;
+        newRevisionIds = new LinkedList<Long>();
+        timeoutMonitor = new Object();
+        updateMonitor = new Object();
+        locked = false;
 
         // start update thread
         Updater updater = new Updater();
@@ -49,13 +55,18 @@ public class Journal {
         thread.start();
     }
 
+    /**
+     * Synchronous update of the journal.
+     */
     public void update() {
         try {
-            synchronized (updateLock) {
-                synchronized (timeoutLock) {
-                    timeoutLock.notify();
+            synchronized (updateMonitor) {
+                synchronized (timeoutMonitor) {
+                    // wake thread up in case it sleeps
+                    timeoutMonitor.notify();
                 }
-                updateLock.wait();
+                // wait to be notified
+                updateMonitor.wait();
             }
         } catch (InterruptedException e) {
             // thread has been notified
@@ -71,7 +82,7 @@ public class Journal {
     /**
      * Returns the complete journal.
      */
-    public LinkedList<Long> getJournal() {
+    public LinkedList<Long> get() {
         synchronized (journal) {
             return new LinkedList<Long>(journal);
         }
@@ -85,34 +96,65 @@ public class Journal {
      * @throws MicroKernelException when specified revision id is not present in
      *             journal
      */
-    public LinkedList<Long> getJournal(long revisionId) {
-        LinkedList<Long> revisionIds = getJournal();
+    public LinkedList<Long> get(long revisionId) {
+        // get current journal
+        LinkedList<Long> revisionIds = get();
+        // assemble all revision ids up to and including 'revisionId'
+        LinkedList<Long> journal = new LinkedList<Long>();
         boolean found = false;
         Iterator<Long> iterator = revisionIds.iterator();
         while (iterator.hasNext()) {
-            if (iterator.next() == revisionId) {
+            Long id = iterator.next();
+            journal.add(id);
+            if (id == revisionId) {
                 found = true;
-            } else if (found) {
-                iterator.remove();
+                break;
             }
         }
         if (!found) {
             throw new MicroKernelException("Unknown revision id " + revisionId);
         }
-        return revisionIds;
+        return journal;
     }
 
     public void addRevisionId(long revisionId) {
         synchronized (journal) {
-            journal.add(revisionId);
-            headRevisionId = revisionId;
+            if (!journal.contains(revisionId)) {
+                journal.add(revisionId);
+                headRevisionId = revisionId;
+            }
+        }
+    }
+
+    /**
+     * Locks the journal. The update thread might still fetch new revisions,
+     * however they are not added to journal until unlocked.
+     */
+    public void lock() {
+        if (locked) {
+            throw new IllegalStateException("Journal is already locked");
+        }
+        synchronized (newRevisionIds) {
+            locked = true;
+        }
+    }
+
+    public void unlock() {
+        if (!locked) {
+            throw new IllegalStateException("Journal is not locked");
+        }
+        synchronized (newRevisionIds) {
+            for (Long id : newRevisionIds) {
+                addRevisionId(id);
+            }
+            locked = false;
         }
     }
 
     public void dispose() throws IOException {
         done = true;
-        synchronized (timeoutLock) {
-            timeoutLock.notify();
+        synchronized (timeoutMonitor) {
+            timeoutMonitor.notify();
         }
         try {
             // wait for thread to die
@@ -137,6 +179,7 @@ public class Journal {
                 scan.setStartRow(Bytes.toBytes(timestamp << 24));
             }
             lastTimeRead = System.currentTimeMillis();
+            List<Long> revisionIds = new LinkedList<Long>();
             ResultScanner scanner = table.getScanner(scan);
             Iterator<Result> iterator = scanner.iterator();
             while (iterator.hasNext()) {
@@ -147,17 +190,18 @@ public class Journal {
                         JournalTable.COL_COMMITTED.toBytes()))) {
                     continue;
                 }
-                long id = Bytes.toLong(result.getRow());
-                synchronized (journal) {
-                    // discard if already present
-                    if (!journal.contains(id)) {
-                        // add revision to journal
-                        journal.add(id);
-                        headRevisionId = id;
+                revisionIds.add(Bytes.toLong(result.getRow()));
+            }
+            scanner.close();
+            synchronized (newRevisionIds) {
+                if (locked) {
+                    newRevisionIds.addAll(revisionIds);
+                } else {
+                    for (Long id : revisionIds) {
+                        addRevisionId(id);
                     }
                 }
             }
-            scanner.close();
         }
 
         @Override
@@ -165,11 +209,13 @@ public class Journal {
             while (!done) {
                 try {
                     updateJournal();
-                    synchronized (updateLock) {
-                        updateLock.notify();
+                    synchronized (updateMonitor) {
+                        // interrupt thread waiting in update method
+                        updateMonitor.notify();
                     }
-                    synchronized (timeoutLock) {
-                        timeoutLock.wait(TIMEOUT);
+                    synchronized (timeoutMonitor) {
+                        // sleep
+                        timeoutMonitor.wait(TIMEOUT);
                     }
                 } catch (InterruptedException e) {
                     // thread has been interrupted

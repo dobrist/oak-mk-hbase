@@ -179,7 +179,7 @@ public class HBaseMicroKernel implements MicroKernel {
         try {
             // get journal
             long revId = getRevisionId(revisionId);
-            LinkedList<Long> journal = this.journal.getJournal(revId);
+            LinkedList<Long> journal = this.journal.get(revId);
 
             // do a filtered prefix scan:
             Scan scan = new Scan();
@@ -257,7 +257,8 @@ public class HBaseMicroKernel implements MicroKernel {
                 if (tries > 1) {
                     journal.update();
                 }
-                LinkedList<Long> journal = this.journal.getJournal();
+                journal.lock();
+                LinkedList<Long> journal = this.journal.get();
 
                 // read nodes that are to be written
                 nodesBefore = getNodes(update.getModifiedNodes(), journal);
@@ -312,7 +313,8 @@ public class HBaseMicroKernel implements MicroKernel {
                 rollback(update, newRevId);
             } while (true);
 
-            this.journal.addRevisionId(newRevId);
+            journal.addRevisionId(newRevId);
+            journal.unlock();
             cacheNodes(nodesBefore, update, newRevId);
             return String.valueOf(newRevId);
         } catch (Exception e) {
@@ -639,6 +641,7 @@ public class HBaseMicroKernel implements MicroKernel {
     }
 
     private void rollback(Update update, long newRevisionId) throws IOException {
+        journal.unlock();
         Map<String, Delete> deletes = new HashMap<String, Delete>();
         Delete delete;
         // - rollback added nodes
@@ -766,7 +769,7 @@ public class HBaseMicroKernel implements MicroKernel {
     private Node getNode(String path, String revisionId) throws IOException {
         // get journal
         long revId = getRevisionId(revisionId);
-        LinkedList<Long> journal = this.journal.getJournal(revId);
+        LinkedList<Long> journal = this.journal.get(revId);
         // read and return node
         List<String> paths = new LinkedList<String>();
         paths.add(path);
