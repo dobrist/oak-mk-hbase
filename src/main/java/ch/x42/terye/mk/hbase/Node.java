@@ -19,8 +19,16 @@ public class Node {
 
     public Node(String path) {
         this.path = path;
+        this.childCount = 0;
         this.children = new LinkedList<Node>();
         this.properties = new LinkedHashMap<String, Object>();
+    }
+
+    public Node(Node node) {
+        this.path = node.path;
+        this.childCount = node.childCount;
+        this.children = new LinkedList<Node>(node.children);
+        this.properties = new LinkedHashMap<String, Object>(node.properties);
     }
 
     public String getPath() {
@@ -60,7 +68,11 @@ public class Node {
     }
 
     public void setProperty(String name, Object value) {
-        properties.put(name, value);
+        if (value == null) {
+            properties.remove(name);
+        } else {
+            properties.put(name, value);
+        }
     }
 
     /**

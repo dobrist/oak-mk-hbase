@@ -313,6 +313,7 @@ public class HBaseMicroKernel implements MicroKernel {
             } while (true);
 
             this.journal.addRevisionId(newRevId);
+            cacheNodes(nodesBefore, update, newRevId);
             return String.valueOf(newRevId);
         } catch (Exception e) {
             throw new MicroKernelException("Commit failed", e);
@@ -613,7 +614,7 @@ public class HBaseMicroKernel implements MicroKernel {
             // check if we're the smallest revision id...
             for (Long id : lastRevisions) {
                 if (id < newRevisionId) {
-                    // we're no the smallest, thus we yield and retry
+                    // we're not the smallest, thus we yield and retry
                     return false;
                 }
             }
@@ -674,6 +675,44 @@ public class HBaseMicroKernel implements MicroKernel {
             deletes.put(path, delete);
         }
         return deletes.get(path);
+    }
+
+    /**
+     * Create in-memory representations of the node that have been written and
+     * puts them into the cache.
+     */
+    private void cacheNodes(Map<String, Node> nodesBefore, Update update,
+            long newRevisionId) {
+        // construct nodes to be cached from 'nodesBefore' and 'update'
+        Map<String, Node> nodes = new HashMap<String, Node>();
+        // - added nodes
+        for (String path : update.getAddedNodes()) {
+            Node node = new Node(path);
+            nodes.put(path, node);
+        }
+        // - changed child counts
+        for (Entry<String, Long> entry : update.getChangedChildCounts()
+                .entrySet()) {
+            String path = entry.getKey();
+            Node before = nodesBefore.get(path);
+            Node node = nodes.containsKey(path) ? nodes.get(path) : new Node(
+                    before);
+            node.setChildCount(node.getChildCount() + entry.getValue());
+        }
+        // - set properties
+        for (Entry<String, Object> entry : update.getSetProperties().entrySet()) {
+            String parentPath = PathUtils.getParentPath(entry.getKey());
+            Node before = nodesBefore.get(parentPath);
+            Node node = nodes.containsKey(parentPath) ? nodes.get(parentPath)
+                    : new Node(before);
+            node.setProperty(PathUtils.getName(entry.getKey()),
+                    entry.getValue());
+        }
+        // cache nodes
+        for (Node node : nodes.values()) {
+            node.setLastRevision(newRevisionId);
+            cache.put(newRevisionId, node);
+        }
     }
 
     /* helper methods for reading the node table */
