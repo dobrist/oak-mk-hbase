@@ -280,7 +280,6 @@ public class HBaseMicroKernel implements MicroKernel {
                 }
 
                 // check for potential concurrent modifications
-                // if (verifyUpdate(nodesBefore, update, newRevId)) {
                 if (verifyUpdate(nodesBefore, journal, update, newRevId)) {
                     // before committing, check if the execution time of this
                     // try is within the bounds of the grace period defined in
@@ -403,11 +402,11 @@ public class HBaseMicroKernel implements MicroKernel {
      *  
      * - timestamp: 5 bytes, [0, 1099511627775]
      * - machine_id: 2 bytes, [0, 65535]
-     * - count: 1 byte, [0, 65535]
+     * - count: 1 byte, [0, 255]
      * </pre>
      * 
      * The unit of the "timestamp" field is milliseconds and since we only have
-     * 4 bytes available, we base it on an artificial epoch constant in order to
+     * 5 bytes available, we base it on an artificial epoch constant in order to
      * have more values available. The machine id used for "machine_id" is
      * either set explicitly or generated using the hashcode of the MAC address
      * string. If the same machine commits a revision within the same
@@ -422,7 +421,7 @@ public class HBaseMicroKernel implements MicroKernel {
         timestamp <<= 24;
         // check for overflow
         if (timestamp < 0) {
-            // we have use all available time values
+            // we have used all available time values
             throw new MicroKernelException("Error generating new revision id");
         }
 
