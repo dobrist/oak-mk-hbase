@@ -55,11 +55,6 @@ public class HBaseMicroKernel implements MicroKernel {
 
     /* configuration */
 
-    // the timestamp of the revision ids generated is based on the following
-    // date instead of the usual unix epoch:
-    // 01.01.2013 00:00:00
-    // NEVER EVER CHANGE THIS VALUE
-    public static final long EPOCH = 1356998400;
     // max number of retries in case of a concurrent modification
     private static final int MAX_RETRIES = 100;
     // max number of entries in the LRU node cache
@@ -69,37 +64,36 @@ public class HBaseMicroKernel implements MicroKernel {
     private HTable journalTable;
     private HTable nodeTable;
 
+    private RevisionIdGenerator revIdGenerator;
     private Journal journal;
     private NodeCache cache;
 
-    // the machine id associated with this microkernel instance
-    private long machineId;
-    // the timestamp of the revision id last generated
-    private long lastTimestamp;
-    // counter to differentiate revision ids generated within the same second
-    private int count;
-
     /**
-     * This constructor can be used to explicitely set the machine id. This is
+     * This constructor can be used to explicitly set the machine id. This is
      * useful when concurrently executing multiple microkernels on the same
      * machine.
      */
-    public HBaseMicroKernel(HBaseAdmin admin, int machineId) throws Exception {
+    public HBaseMicroKernel(HBaseAdmin admin, Integer machineId)
+            throws Exception {
         this.admin = admin;
         journalTable = HBaseUtils.getOrCreateTable(admin, JOURNAL);
         nodeTable = HBaseUtils.getOrCreateTable(admin, NODES);
+
+        int mid = machineId == null ? getMachineId() : machineId;
+        revIdGenerator = new RevisionIdGenerator(mid);
         journal = new Journal(HBaseUtils.getOrCreateTable(admin, JOURNAL));
         cache = new NodeCache(MAX_CACHE_ENTRIES);
-        if (machineId < 0 || machineId > 65535) {
-            throw new IllegalArgumentException("Machine id is out of range");
-        }
-        this.machineId = (long) machineId;
-        this.lastTimestamp = -1;
-        this.count = 0;
+    }
+
+    public HBaseMicroKernel(HBaseAdmin admin, int machineId) throws Exception {
+        this(admin, new Integer(machineId));
     }
 
     public HBaseMicroKernel(HBaseAdmin admin) throws Exception {
-        this(admin, 0);
+        this(admin, null);
+    }
+
+    private int getMachineId() {
         // generate machine id
         try {
             // get MAC address string
@@ -110,10 +104,10 @@ public class HBaseMicroKernel implements MicroKernel {
             for (int i = 0; i < address.length; i++) {
                 sb.append(String.format("%02X", address[i]));
             }
-            machineId = (long) sb.hashCode();
+            return sb.hashCode() & Integer.decode("0x0000FFFF");
         } catch (Throwable e) {
             // some error occurred, use a random machine id
-            machineId = (long) new Random().nextInt();
+            return new Random().nextInt(65536);
         }
     }
 
@@ -246,7 +240,7 @@ public class HBaseMicroKernel implements MicroKernel {
 
                 // generate new revision id
                 long start = System.currentTimeMillis();
-                newRevId = generateNewRevisionId();
+                newRevId = revIdGenerator.getNewId();
 
                 // write journal entry for this revision
                 Put put = new Put(Bytes.toBytes(newRevId));
@@ -395,58 +389,6 @@ public class HBaseMicroKernel implements MicroKernel {
     }
 
     /* helper methods for commit */
-
-    /**
-     * This method generates a new revision id. A revision id is a signed (but
-     * non-negative) long composed of the concatenation (left-to-right) of
-     * following fields:
-     * 
-     * <pre>
-     *  ------------------------------------------------------------------
-     * |                              timestamp |     machine_id |  count |
-     *  ------------------------------------------------------------------
-     *  
-     * - timestamp: 5 bytes, [0, 1099511627775]
-     * - machine_id: 2 bytes, [0, 65535]
-     * - count: 1 byte, [0, 255]
-     * </pre>
-     * 
-     * The unit of the "timestamp" field is milliseconds and since we only have
-     * 5 bytes available, we base it on an artificial epoch constant in order to
-     * have more values available. The machine id used for "machine_id" is
-     * either set explicitly or generated using the hashcode of the MAC address
-     * string. If the same machine commits a revision within the same
-     * millisecond, then the "count" field is used in order to create a unique
-     * revision id.
-     * 
-     * @return a new and unique revision id
-     */
-    private long generateNewRevisionId() {
-        // timestamp
-        long timestamp = System.currentTimeMillis() - EPOCH;
-        timestamp <<= 24;
-        // check for overflow
-        if (timestamp < 0) {
-            // we have used all available time values
-            throw new MicroKernelException("Error generating new revision id");
-        }
-
-        // machine id
-        long machineId = (this.machineId << 16)
-                & Long.decode("0x00000000FFFF0000");
-
-        // counter
-        if (timestamp == lastTimestamp) {
-            count++;
-        } else {
-            lastTimestamp = timestamp;
-            count = 0;
-        }
-        long count = this.count & Integer.decode("0x000000FF");
-
-        // assemble and return revision id
-        return timestamp | machineId | count;
-    }
 
     /**
      * This method validates the changes that are to be committed.

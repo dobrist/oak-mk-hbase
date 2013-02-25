@@ -174,7 +174,7 @@ public class Journal {
             if (lastTimeRead != null) {
                 // only scan what hasn't been scanned yet (giving potential
                 // long-taking revisions a grace period of GRACE_PERIOD ms)
-                long timestamp = lastTimeRead - HBaseMicroKernel.EPOCH
+                long timestamp = lastTimeRead - RevisionIdGenerator.EPOCH
                         - GRACE_PERIOD;
                 scan.setStartRow(Bytes.toBytes(timestamp << 24));
             }
