@@ -649,6 +649,12 @@ public class HBaseMicroKernel implements MicroKernel {
             delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
                     NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId);
         }
+        // - rollback deleted nodes
+        for (String node : update.getDeletedNodes()) {
+            delete = getDelete(node, newRevisionId, deletes);
+            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_DELETED.toBytes(), newRevisionId);
+        }
         // - rollback changed child counts
         for (String node : update.getChangedChildCounts().keySet()) {
             delete = getDelete(node, newRevisionId, deletes);
