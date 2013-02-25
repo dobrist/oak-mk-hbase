@@ -37,8 +37,8 @@ public class Journal {
     private Object updateMonitor;
     private boolean locked;
 
-    public Journal(HTable table) throws IOException {
-        this.table = table;
+    public Journal(HTable journalTable) throws IOException {
+        table = journalTable;
         journal = new LinkedHashSet<Long>();
         journal.add(0L);
         headRevisionId = 0L;

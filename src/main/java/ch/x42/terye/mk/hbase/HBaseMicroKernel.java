@@ -31,6 +31,7 @@ import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
+import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
@@ -64,9 +65,13 @@ public class HBaseMicroKernel implements MicroKernel {
     // max number of entries in the LRU node cache
     private static final int MAX_CACHE_ENTRIES = 1000;
 
-    private HBaseTableManager tableMgr;
+    private HBaseAdmin admin;
+    private HTable journalTable;
+    private HTable nodeTable;
+
     private Journal journal;
     private NodeCache cache;
+
     // the machine id associated with this microkernel instance
     private long machineId;
     // the timestamp of the revision id last generated
@@ -80,8 +85,10 @@ public class HBaseMicroKernel implements MicroKernel {
      * machine.
      */
     public HBaseMicroKernel(HBaseAdmin admin, int machineId) throws Exception {
-        tableMgr = new HBaseTableManager(admin, HBaseMicroKernelSchema.TABLES);
-        journal = new Journal(tableMgr.create(JOURNAL));
+        this.admin = admin;
+        journalTable = HBaseUtils.getOrCreateTable(admin, JOURNAL);
+        nodeTable = HBaseUtils.getOrCreateTable(admin, NODES);
+        journal = new Journal(HBaseUtils.getOrCreateTable(admin, JOURNAL));
         cache = new NodeCache(MAX_CACHE_ENTRIES);
         if (machineId < 0 || machineId > 65535) {
             throw new IllegalArgumentException("Machine id is out of range");
@@ -203,7 +210,7 @@ public class HBaseMicroKernel implements MicroKernel {
                     new RegexStringComparator(regex));
             scan.setFilter(depthFilter);
             Map<String, Result> rows = new LinkedHashMap<String, Result>();
-            ResultScanner scanner = tableMgr.get(NODES).getScanner(scan);
+            ResultScanner scanner = nodeTable.getScanner(scan);
             for (Result result : scanner) {
                 rows.put(NodeTable.rowKeyToPath(result.getRow()), result);
             }
@@ -251,7 +258,7 @@ public class HBaseMicroKernel implements MicroKernel {
                 put.add(JournalTable.CF_DATA.toBytes(),
                         JournalTable.COL_MESSAGE.toBytes(),
                         Bytes.toBytes(message));
-                tableMgr.get(JOURNAL).put(put);
+                journalTable.put(put);
 
                 // update journal on first retry
                 if (tries > 1) {
@@ -269,7 +276,7 @@ public class HBaseMicroKernel implements MicroKernel {
                 // generate update batch and write it to HBase
                 List<Row> batch = generateUpdateOps(nodesBefore, update,
                         newRevId);
-                Object[] results = tableMgr.get(NODES).batch(batch);
+                Object[] results = nodeTable.batch(batch);
                 for (Object result : results) {
                     // a null result means the write operation failed, in which
                     // case we roll back
@@ -294,8 +301,7 @@ public class HBaseMicroKernel implements MicroKernel {
                     put.add(JournalTable.CF_DATA.toBytes(),
                             JournalTable.COL_COMMITTED.toBytes(),
                             Bytes.toBytes(true));
-                    if (tableMgr.get(JOURNAL).checkAndPut(
-                            Bytes.toBytes(newRevId),
+                    if (journalTable.checkAndPut(Bytes.toBytes(newRevId),
                             JournalTable.CF_DATA.toBytes(),
                             JournalTable.COL_ABORT.toBytes(),
                             Bytes.toBytes(false), put)) {
@@ -625,7 +631,7 @@ public class HBaseMicroKernel implements MicroKernel {
                 Put put = new Put(Bytes.toBytes(id));
                 put.add(JournalTable.CF_DATA.toBytes(),
                         JournalTable.COL_ABORT.toBytes(), Bytes.toBytes(true));
-                if (!tableMgr.get(JOURNAL).checkAndPut(Bytes.toBytes(id),
+                if (!journalTable.checkAndPut(Bytes.toBytes(id),
                         JournalTable.CF_DATA.toBytes(),
                         JournalTable.COL_COMMITTED.toBytes(),
                         Bytes.toBytes(false), put)) {
@@ -671,7 +677,7 @@ public class HBaseMicroKernel implements MicroKernel {
                     newRevisionId);
         }
         List<Delete> batch = new LinkedList<Delete>(deletes.values());
-        tableMgr.get(NODES).delete(batch);
+        nodeTable.delete(batch);
     }
 
     private Delete getDelete(String path, long revisionId,
@@ -741,7 +747,7 @@ public class HBaseMicroKernel implements MicroKernel {
             get.setMaxVersions();
             batch.add(get);
         }
-        for (Result result : tableMgr.get(NODES).get(batch)) {
+        for (Result result : nodeTable.get(batch)) {
             if (!result.isEmpty()) {
                 String path = NodeTable.rowKeyToPath(result.getRow());
                 nodes.put(path, result);
@@ -892,14 +898,16 @@ public class HBaseMicroKernel implements MicroKernel {
     public void dispose(boolean dropTables) throws IOException {
         journal.dispose();
         cache.clear();
+        journalTable.close();
+        nodeTable.close();
         if (dropTables) {
             try {
-                tableMgr.dropAllTables();
+                HBaseUtils.dropAllTables(admin);
             } catch (TableNotFoundException e) {
                 // nothing to do
             }
         }
-        tableMgr.dispose();
+        admin.close();
     }
 
 }
