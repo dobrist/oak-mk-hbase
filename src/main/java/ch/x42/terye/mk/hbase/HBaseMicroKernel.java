@@ -487,24 +487,7 @@ public class HBaseMicroKernel implements MicroKernel {
                 bytes = NodeTable.DELETE_MARKER;
             } else {
                 // convert value to bytes
-                byte typePrefix;
-                byte[] tmp;
-                if (value instanceof String) {
-                    typePrefix = NodeTable.TYPE_STRING_PREFIX;
-                    tmp = Bytes.toBytes((String) value);
-                } else if (value instanceof Number) {
-                    typePrefix = NodeTable.TYPE_LONG_PREFIX;
-                    tmp = Bytes.toBytes(((Number) value).longValue());
-                } else if (value instanceof Boolean) {
-                    typePrefix = NodeTable.TYPE_BOOLEAN_PREFIX;
-                    tmp = Bytes.toBytes((Boolean) value);
-                } else {
-                    throw new MicroKernelException("Property " + entry.getKey()
-                            + " has unknown type " + value.getClass());
-                }
-                bytes = new byte[tmp.length + 1];
-                bytes[0] = typePrefix;
-                System.arraycopy(tmp, 0, bytes, 1, tmp.length);
+                bytes = NodeTable.toBytes(value);
             }
             put = getPut(parentPath, newRevisionId, puts);
             Qualifier q = new Qualifier(NodeTable.DATA_PROPERTY_PREFIX, name);
@@ -808,20 +791,7 @@ public class HBaseMicroKernel implements MicroKernel {
                     System.arraycopy(colName, 1, tmp, 0, tmp.length);
                     String name = Bytes.toString(tmp);
                     // value
-                    Object val;
-                    tmp = new byte[value.length - 1];
-                    System.arraycopy(value, 1, tmp, 0, value.length - 1);
-                    if (value[0] == NodeTable.TYPE_STRING_PREFIX) {
-                        val = Bytes.toString(tmp);
-                    } else if (value[0] == NodeTable.TYPE_LONG_PREFIX) {
-                        val = Bytes.toLong(tmp);
-                    } else if (value[0] == NodeTable.TYPE_BOOLEAN_PREFIX) {
-                        val = Bytes.toBoolean(tmp);
-                    } else {
-                        throw new MicroKernelException("Property "
-                                + PathUtils.concat(path, name)
-                                + " has unknown type prefix " + value[0]);
-                    }
+                    Object val = NodeTable.fromBytes(value);
                     node.setProperty(name, val);
                 }
             }

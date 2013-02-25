@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.jackrabbit.mk.api.MicroKernelException;
 import org.apache.jackrabbit.oak.commons.PathUtils;
 
 /**
@@ -81,6 +82,45 @@ public class HBaseMicroKernelSchema {
             String rowKeyStr = Bytes.toString(rowKey);
             return PathUtils.denotesRoot(rowKeyStr) ? rowKeyStr : rowKeyStr
                     .substring(0, rowKeyStr.length() - 1);
+        }
+
+        public static byte[] toBytes(Object value) {
+            byte typePrefix;
+            byte[] tmp;
+            if (value instanceof String) {
+                typePrefix = NodeTable.TYPE_STRING_PREFIX;
+                tmp = Bytes.toBytes((String) value);
+            } else if (value instanceof Number) {
+                typePrefix = NodeTable.TYPE_LONG_PREFIX;
+                tmp = Bytes.toBytes(((Number) value).longValue());
+            } else if (value instanceof Boolean) {
+                typePrefix = NodeTable.TYPE_BOOLEAN_PREFIX;
+                tmp = Bytes.toBytes((Boolean) value);
+            } else {
+                throw new MicroKernelException("Unsupported value type: "
+                        + value.getClass());
+            }
+            byte[] bytes = new byte[tmp.length + 1];
+            bytes[0] = typePrefix;
+            System.arraycopy(tmp, 0, bytes, 1, tmp.length);
+            return bytes;
+        }
+
+        public static Object fromBytes(byte[] value) {
+            Object val;
+            byte[] tmp = new byte[value.length - 1];
+            System.arraycopy(value, 1, tmp, 0, value.length - 1);
+            if (value[0] == NodeTable.TYPE_STRING_PREFIX) {
+                val = Bytes.toString(tmp);
+            } else if (value[0] == NodeTable.TYPE_LONG_PREFIX) {
+                val = Bytes.toLong(tmp);
+            } else if (value[0] == NodeTable.TYPE_BOOLEAN_PREFIX) {
+                val = Bytes.toBoolean(tmp);
+            } else {
+                throw new MicroKernelException("Unsupported type prefix: "
+                        + value[0]);
+            }
+            return val;
         }
 
     }
