@@ -5,6 +5,8 @@ import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.TableNotFoundException;
@@ -179,7 +181,8 @@ public class Journal {
                 scan.setStartRow(Bytes.toBytes(timestamp << 24));
             }
             lastTimeRead = System.currentTimeMillis();
-            List<Long> revisionIds = new LinkedList<Long>();
+            // sort new revision ids by the time they were committed
+            SortedMap<Long, Long> revisionIds = new TreeMap<Long, Long>();
             ResultScanner scanner = table.getScanner(scan);
             Iterator<Result> iterator = scanner.iterator();
             while (iterator.hasNext()) {
@@ -190,14 +193,19 @@ public class Journal {
                         JournalTable.COL_COMMITTED.toBytes()))) {
                     continue;
                 }
-                revisionIds.add(Bytes.toLong(result.getRow()));
+                // timestamp of the last writing of the committed column
+                Long timestamp = result.getMap()
+                        .get(JournalTable.CF_DATA.toBytes())
+                        .get(JournalTable.COL_COMMITTED.toBytes()).firstEntry()
+                        .getKey();
+                revisionIds.put(timestamp, Bytes.toLong(result.getRow()));
             }
             scanner.close();
             synchronized (newRevisionIds) {
                 if (locked) {
-                    newRevisionIds.addAll(revisionIds);
+                    newRevisionIds.addAll(revisionIds.values());
                 } else {
-                    for (Long id : revisionIds) {
+                    for (Long id : revisionIds.values()) {
                         addRevisionId(id);
                     }
                 }
