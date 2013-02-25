@@ -55,10 +55,12 @@ public class HBaseMicroKernel implements MicroKernel {
 
     /* configuration */
 
+    // read journal table every so many milliseconds
+    public static final int JOURNAL_UPDATE_TIMEOUT = 1500;
     // max number of retries in case of a concurrent modification
-    private static final int MAX_RETRIES = 100;
+    public static final int MAX_RETRIES = 100;
     // max number of entries in the LRU node cache
-    private static final int MAX_CACHE_ENTRIES = 1000;
+    public static final int MAX_CACHE_ENTRIES = 1000;
 
     private HBaseAdmin admin;
     private HTable journalTable;
@@ -81,7 +83,8 @@ public class HBaseMicroKernel implements MicroKernel {
 
         int mid = machineId == null ? getMachineId() : machineId;
         revIdGenerator = new RevisionIdGenerator(mid);
-        journal = new Journal(HBaseUtils.getOrCreateTable(admin, JOURNAL));
+        journal = new Journal(HBaseUtils.getOrCreateTable(admin, JOURNAL),
+                JOURNAL_UPDATE_TIMEOUT);
         cache = new NodeCache(MAX_CACHE_ENTRIES);
     }
 

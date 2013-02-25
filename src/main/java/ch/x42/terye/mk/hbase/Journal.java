@@ -19,14 +19,13 @@ import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 
 public class Journal {
 
-    // read journal table every so many milliseconds
-    private static final int TIMEOUT = 1500;
     // grace period for long-taking tries of revisions (a commit, where the
     // successful try took longer than the grace period might not be seen by
     // other microkernels)
     public static final int GRACE_PERIOD = 800;
 
     private HTable table;
+    private final int timeout;
     public LinkedHashSet<Long> journal;
     private long headRevisionId;
     private List<Long> newRevisionIds;
@@ -37,8 +36,9 @@ public class Journal {
     private Object updateMonitor;
     private boolean locked;
 
-    public Journal(HTable journalTable) throws IOException {
+    public Journal(HTable journalTable, int timeout) throws IOException {
         table = journalTable;
+        this.timeout = timeout;
         journal = new LinkedHashSet<Long>();
         journal.add(0L);
         headRevisionId = 0L;
@@ -215,7 +215,7 @@ public class Journal {
                     }
                     synchronized (timeoutMonitor) {
                         // sleep
-                        timeoutMonitor.wait(TIMEOUT);
+                        timeoutMonitor.wait(timeout);
                     }
                 } catch (InterruptedException e) {
                     // thread has been interrupted
