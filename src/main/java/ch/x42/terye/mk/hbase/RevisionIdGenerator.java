@@ -60,12 +60,13 @@ public class RevisionIdGenerator {
         // check for overflow
         if (timestamp < 0) {
             // we have used all available time values
-            throw new MicroKernelException("Error generating new revision id");
+            throw new MicroKernelException(
+                    "Error generating new revision id, timestamp overflowed");
         }
 
         // machine id
-        long machineId = (this.machineId << 16)
-                & Long.decode("0x00000000FFFF0000");
+        long machineId = (this.machineId << 8)
+                & Long.decode("0x0000000000FFFF00");
 
         // counter
         if (timestamp == lastTimestamp) {
@@ -73,6 +74,10 @@ public class RevisionIdGenerator {
         } else {
             lastTimestamp = timestamp;
             count = 0;
+        }
+        if (count > 255) {
+            throw new MicroKernelException(
+                    "Error generating new revision id, counter overflowed");
         }
         long count = this.count & Integer.decode("0x000000FF");
 
