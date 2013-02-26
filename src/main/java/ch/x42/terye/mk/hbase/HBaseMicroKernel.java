@@ -152,7 +152,7 @@ public class HBaseMicroKernel implements MicroKernel {
             throws MicroKernelException {
         try {
             return getNode(path, revisionId) != null;
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new MicroKernelException("Error testing existence of node "
                     + path, e);
         }
@@ -170,7 +170,7 @@ public class HBaseMicroKernel implements MicroKernel {
                         + " doesn't exist in " + s);
             }
             return node.getChildCount();
-        } catch (IOException e) {
+        } catch (Exception e) {
             throw new MicroKernelException("Error getting child count of node "
                     + path, e);
         }
