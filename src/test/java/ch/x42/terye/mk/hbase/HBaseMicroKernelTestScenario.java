@@ -78,6 +78,29 @@ public class HBaseMicroKernelTestScenario {
      * 
      * @param path the node path
      */
+    public void removeNode(String path) throws IOException {
+        startCommit();
+        // mark node as deleted
+        Put put = new Put(NodeTable.pathToRowKey(path), revisionId);
+        put.add(NodeTable.CF_DATA.toBytes(), NodeTable.COL_DELETED.toBytes(),
+                revisionId, Bytes.toBytes(true));
+        nodeTable.put(put);
+        // decrement child node count of parent node
+        String parentPath = PathUtils.getParentPath(path);
+        put = new Put(NodeTable.pathToRowKey(parentPath), revisionId);
+        byte[] bytes = getProperty(parentPath, NodeTable.COL_CHILD_COUNT);
+        long cc = Bytes.toLong(bytes) - 1;
+        put.add(NodeTable.CF_DATA.toBytes(),
+                NodeTable.COL_CHILD_COUNT.toBytes(), revisionId,
+                Bytes.toBytes(cc));
+        nodeTable.put(put);
+    }
+
+    /**
+     * Adds a new node at a given path.
+     * 
+     * @param path the node path
+     */
     public void setProperty(String path, Object value) throws IOException {
         startCommit();
         String parentPath = PathUtils.getParentPath(path);

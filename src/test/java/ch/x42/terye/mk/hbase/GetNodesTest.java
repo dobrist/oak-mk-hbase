@@ -45,7 +45,8 @@ public class GetNodesTest extends HBaseMicroKernelTest {
         scenario.addNode("/c/f");
         scenario.setProperty("/s", "ijklmnop");
         revisionIds.add(scenario.commit());
-        Thread.sleep(HBaseMicroKernel.JOURNAL_UPDATE_TIMEOUT + 500);
+        // wait for the microkernel to see the commits
+        Thread.sleep(WAIT_TIMEOUT);
         return revisionIds.toArray(new String[0]);
     }
 

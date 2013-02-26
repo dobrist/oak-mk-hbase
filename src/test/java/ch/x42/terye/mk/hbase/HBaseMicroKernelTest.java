@@ -23,6 +23,7 @@ import org.junit.BeforeClass;
  */
 public abstract class HBaseMicroKernelTest {
 
+    public static final int WAIT_TIMEOUT = HBaseMicroKernel.JOURNAL_UPDATE_TIMEOUT + 100;
     private static Configuration config;
     protected HBaseMicroKernel microKernel;
     protected HBaseMicroKernelTestScenario scenario;
