@@ -10,12 +10,12 @@ public class GetNodesTest extends HBaseMicroKernelTest {
 
     @Test(expected = MicroKernelException.class)
     public void testNonExistingRevision() throws Exception {
-        microKernel.getNodes("/", "10", 0, 0, -1, null);
+        mk.getNodes("/", "10", 0, 0, -1, null);
     }
 
     @Test(expected = MicroKernelException.class)
     public void testInvalidRevision() throws Exception {
-        microKernel.getNodes("/", "abcd1234", 0, 0, -1, null);
+        mk.getNodes("/", "abcd1234", 0, 0, -1, null);
     }
 
     @Test
@@ -26,7 +26,7 @@ public class GetNodesTest extends HBaseMicroKernelTest {
         s += "  \":childNodeCount\":0";
         s += "}";
         // get nodes
-        String result = microKernel.getNodes("/", "0", 9999, 0, -1, null);
+        String result = mk.getNodes("/", "0", 9999, 0, -1, null);
         // assert JSON equality
         assertJSONEquals(s, result);
     }
@@ -81,7 +81,7 @@ public class GetNodesTest extends HBaseMicroKernelTest {
         s += "  }";
         s += "}";
         // get nodes
-        String result = microKernel.getNodes("/", null, 9999, 0, -1, null);
+        String result = mk.getNodes("/", null, 9999, 0, -1, null);
         // assert JSON equality
         assertJSONEquals(s, result);
     }
@@ -127,8 +127,8 @@ public class GetNodesTest extends HBaseMicroKernelTest {
         s2 += "  }";
         s2 += "}";
         // get nodes
-        String res1 = microKernel.getNodes("/", revIds[0], 9999, 0, -1, null);
-        String res2 = microKernel.getNodes("/", revIds[1], 9999, 0, -1, null);
+        String res1 = mk.getNodes("/", revIds[0], 9999, 0, -1, null);
+        String res2 = mk.getNodes("/", revIds[1], 9999, 0, -1, null);
         // assert JSON equality
         assertJSONEquals(s1, res1);
         assertJSONEquals(s2, res2);
@@ -146,7 +146,7 @@ public class GetNodesTest extends HBaseMicroKernelTest {
         s += "  }";
         s += "}";
         // get nodes
-        String result = microKernel.getNodes("/c/d", null, 9999, 0, -1, null);
+        String result = mk.getNodes("/c/d", null, 9999, 0, -1, null);
         // assert JSON equality
         assertJSONEquals(s, result);
     }
@@ -176,7 +176,7 @@ public class GetNodesTest extends HBaseMicroKernelTest {
         s += "  }";
         s += "}";
         // get nodes
-        String result = microKernel.getNodes("/", null, 1, 0, -1, null);
+        String result = mk.getNodes("/", null, 1, 0, -1, null);
         // assert JSON equality
         assertJSONEquals(s, result);
     }
@@ -195,7 +195,7 @@ public class GetNodesTest extends HBaseMicroKernelTest {
         s += "  }";
         s += "}";
         // get nodes
-        String result = microKernel.getNodes("/", null, 0, 0, -1, null);
+        String result = mk.getNodes("/", null, 0, 0, -1, null);
         // assert JSON equality
         assertJSONEquals(s, result);
     }

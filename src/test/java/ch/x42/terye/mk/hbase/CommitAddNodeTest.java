@@ -16,31 +16,30 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
     public void testAddSingleNodeNonExistingIntermediate() throws Exception {
         // add node with non-existing intermediate nodes
         String jsop = "+\"nonexisting/node\":{}";
-        microKernel.commit("/", jsop, null, "test commit");
+        mk.commit("/", jsop, null, "test commit");
     }
 
     @Test(expected = MicroKernelException.class)
     public void testAddSingleNodeNonExistingPath() throws Exception {
         // add node with non-existing intermediate nodes
         String jsop = "+\"node\":{}";
-        microKernel.commit("/nonexisting", jsop, null, "test commit");
+        mk.commit("/nonexisting", jsop, null, "test commit");
     }
 
     @Test
     public void testAddSingleNode() throws Exception {
         // add one node
         String jsop = "+\"node\":{}";
-        String r = microKernel.commit("/", jsop, null, "test commit");
+        String r = mk.commit("/", jsop, null, "test commit");
         // verify
         String s = "";
         s += "{";
         s += "  \":childNodeCount\":0";
         s += "}";
-        assertJSONEquals(s, microKernel.getNodes("/node", r, 9999, 0, -1, null));
-        assertJSONEquals(s,
-                microKernel.getNodes("/node", null, 9999, 0, -1, null));
-        assertTrue(microKernel.nodeExists("/node", r));
-        assertTrue(microKernel.nodeExists("/node", null));
+        assertJSONEquals(s, mk.getNodes("/node", r, 9999, 0, -1, null));
+        assertJSONEquals(s, mk.getNodes("/node", null, 9999, 0, -1, null));
+        assertTrue(mk.nodeExists("/node", r));
+        assertTrue(mk.nodeExists("/node", null));
     }
 
     @Test(expected = MicroKernelException.class)
@@ -50,7 +49,7 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
         scenario.commit();
         // add already existing node
         String jsop = "+\"node\":{}";
-        microKernel.commit("/", jsop, null, "test commit");
+        mk.commit("/", jsop, null, "test commit");
     }
 
     @Test
@@ -62,7 +61,7 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
         Thread.sleep(WAIT_TIMEOUT);
         // add one node
         String jsop = "+\"child\":{}";
-        String r = microKernel.commit("/node", jsop, null, "test commit");
+        String r = mk.commit("/node", jsop, null, "test commit");
         // verify
         String s = "";
         s += "{";
@@ -71,18 +70,17 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
         s += "    \":childNodeCount\":0";
         s += "  }";
         s += "}";
-        assertJSONEquals(s, microKernel.getNodes("/node", r, 9999, 0, -1, null));
-        assertJSONEquals(s,
-                microKernel.getNodes("/node", null, 9999, 0, -1, null));
-        assertTrue(microKernel.nodeExists("/node/child", r));
-        assertTrue(microKernel.nodeExists("/node/child", null));
+        assertJSONEquals(s, mk.getNodes("/node", r, 9999, 0, -1, null));
+        assertJSONEquals(s, mk.getNodes("/node", null, 9999, 0, -1, null));
+        assertTrue(mk.nodeExists("/node/child", r));
+        assertTrue(mk.nodeExists("/node/child", null));
     }
 
     @Test
     public void testAddMultipleNodes() throws Exception {
         // add nodes
         String jsop = "+\"child\":{} +\"other\":{} +\"third\":{}";
-        String r = microKernel.commit("/", jsop, null, "test commit");
+        String r = mk.commit("/", jsop, null, "test commit");
         // verify
         String s = "";
         s += "{";
@@ -97,21 +95,21 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
         s += "    \":childNodeCount\":0";
         s += "  }";
         s += "}";
-        assertJSONEquals(s, microKernel.getNodes("/", r, 9999, 0, -1, null));
-        assertJSONEquals(s, microKernel.getNodes("/", null, 9999, 0, -1, null));
-        assertTrue(microKernel.nodeExists("/child", null));
-        assertTrue(microKernel.nodeExists("/other", null));
-        assertTrue(microKernel.nodeExists("/third", null));
-        assertTrue(microKernel.nodeExists("/child", r));
-        assertTrue(microKernel.nodeExists("/other", r));
-        assertTrue(microKernel.nodeExists("/third", r));
+        assertJSONEquals(s, mk.getNodes("/", r, 9999, 0, -1, null));
+        assertJSONEquals(s, mk.getNodes("/", null, 9999, 0, -1, null));
+        assertTrue(mk.nodeExists("/child", null));
+        assertTrue(mk.nodeExists("/other", null));
+        assertTrue(mk.nodeExists("/third", null));
+        assertTrue(mk.nodeExists("/child", r));
+        assertTrue(mk.nodeExists("/other", r));
+        assertTrue(mk.nodeExists("/third", r));
     }
 
     @Test
     public void testAddMultipleNestedNodes() throws Exception {
         // add nodes
         String jsop = "+\"node\":{ \"child\":{ \"third-level\":{}, \"sibling\":{}}, \"x\":{ \"y\":{ \"z\":{} } }}";
-        String r = microKernel.commit("/", jsop, null, "test commit");
+        String r = mk.commit("/", jsop, null, "test commit");
         // verify
         String s = "";
         s += "{";
@@ -138,22 +136,22 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
         s += "    }";
         s += "  }";
         s += "}";
-        assertJSONEquals(s, microKernel.getNodes("/", r, 9999, 0, -1, null));
-        assertJSONEquals(s, microKernel.getNodes("/", null, 9999, 0, -1, null));
-        assertTrue(microKernel.nodeExists("/node", r));
-        assertTrue(microKernel.nodeExists("/node/child", r));
-        assertTrue(microKernel.nodeExists("/node/child/third-level", r));
-        assertTrue(microKernel.nodeExists("/node/child/sibling", r));
-        assertTrue(microKernel.nodeExists("/node/x", r));
-        assertTrue(microKernel.nodeExists("/node/x/y", r));
-        assertTrue(microKernel.nodeExists("/node/x/y/z", r));
-        assertTrue(microKernel.nodeExists("/node", null));
-        assertTrue(microKernel.nodeExists("/node/child", null));
-        assertTrue(microKernel.nodeExists("/node/child/third-level", null));
-        assertTrue(microKernel.nodeExists("/node/child/sibling", null));
-        assertTrue(microKernel.nodeExists("/node/x", null));
-        assertTrue(microKernel.nodeExists("/node/x/y", null));
-        assertTrue(microKernel.nodeExists("/node/x/y/z", null));
+        assertJSONEquals(s, mk.getNodes("/", r, 9999, 0, -1, null));
+        assertJSONEquals(s, mk.getNodes("/", null, 9999, 0, -1, null));
+        assertTrue(mk.nodeExists("/node", r));
+        assertTrue(mk.nodeExists("/node/child", r));
+        assertTrue(mk.nodeExists("/node/child/third-level", r));
+        assertTrue(mk.nodeExists("/node/child/sibling", r));
+        assertTrue(mk.nodeExists("/node/x", r));
+        assertTrue(mk.nodeExists("/node/x/y", r));
+        assertTrue(mk.nodeExists("/node/x/y/z", r));
+        assertTrue(mk.nodeExists("/node", null));
+        assertTrue(mk.nodeExists("/node/child", null));
+        assertTrue(mk.nodeExists("/node/child/third-level", null));
+        assertTrue(mk.nodeExists("/node/child/sibling", null));
+        assertTrue(mk.nodeExists("/node/x", null));
+        assertTrue(mk.nodeExists("/node/x/y", null));
+        assertTrue(mk.nodeExists("/node/x/y/z", null));
     }
 
 }

@@ -8,7 +8,7 @@ public class GetHeadRevisionTest extends HBaseMicroKernelTest {
 
     @Test
     public void testInitialRevision() {
-        assertEquals("0", microKernel.getHeadRevision());
+        assertEquals("0", mk.getHeadRevision());
     }
 
     @Test
@@ -19,7 +19,7 @@ public class GetHeadRevisionTest extends HBaseMicroKernelTest {
         // wait for the microkernel to see the commit
         Thread.sleep(WAIT_TIMEOUT);
         // verify
-        assertEquals(r, microKernel.getHeadRevision());
+        assertEquals(r, mk.getHeadRevision());
     }
 
 }

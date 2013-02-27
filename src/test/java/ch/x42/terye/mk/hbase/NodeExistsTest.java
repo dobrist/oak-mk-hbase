@@ -10,21 +10,21 @@ public class NodeExistsTest extends HBaseMicroKernelTest {
 
     @Test(expected = MicroKernelException.class)
     public void testNonExistingRevision() throws Exception {
-        microKernel.nodeExists("/", "10");
+        mk.nodeExists("/", "10");
     }
 
     @Test(expected = MicroKernelException.class)
     public void testInvalidRevision() throws Exception {
-        microKernel.nodeExists("/", "abcd1234");
+        mk.nodeExists("/", "abcd1234");
     }
 
     @Test
     public void testInitialRevision() {
         // initially the root node is the only node
-        assertTrue(microKernel.nodeExists("/", null));
-        assertTrue(microKernel.nodeExists("/", "0"));
-        assertFalse(microKernel.nodeExists("/nonexisting", null));
-        assertFalse(microKernel.nodeExists("/nonexisting", "0"));
+        assertTrue(mk.nodeExists("/", null));
+        assertTrue(mk.nodeExists("/", "0"));
+        assertFalse(mk.nodeExists("/nonexisting", null));
+        assertFalse(mk.nodeExists("/nonexisting", "0"));
     }
 
     @Test
@@ -35,8 +35,8 @@ public class NodeExistsTest extends HBaseMicroKernelTest {
         // wait for the microkernel to see the commit
         Thread.sleep(WAIT_TIMEOUT);
         // verify
-        assertTrue(microKernel.nodeExists("/node", r));
-        assertTrue(microKernel.nodeExists("/node", null));
+        assertTrue(mk.nodeExists("/node", r));
+        assertTrue(mk.nodeExists("/node", null));
     }
 
     @Test
@@ -50,9 +50,9 @@ public class NodeExistsTest extends HBaseMicroKernelTest {
         // wait for the microkernel to see the commits
         Thread.sleep(WAIT_TIMEOUT);
         // verify
-        assertTrue(microKernel.nodeExists("/node", r1));
-        assertFalse(microKernel.nodeExists("/node", r2));
-        assertFalse(microKernel.nodeExists("/node", null));
+        assertTrue(mk.nodeExists("/node", r1));
+        assertFalse(mk.nodeExists("/node", r2));
+        assertFalse(mk.nodeExists("/node", null));
     }
 
     @Test
@@ -69,10 +69,10 @@ public class NodeExistsTest extends HBaseMicroKernelTest {
         // wait for the microkernel to see the commits
         Thread.sleep(WAIT_TIMEOUT);
         // verify
-        assertTrue(microKernel.nodeExists("/node", r1));
-        assertFalse(microKernel.nodeExists("/node", r2));
-        assertTrue(microKernel.nodeExists("/node", r3));
-        assertTrue(microKernel.nodeExists("/node", null));
+        assertTrue(mk.nodeExists("/node", r1));
+        assertFalse(mk.nodeExists("/node", r2));
+        assertTrue(mk.nodeExists("/node", r3));
+        assertTrue(mk.nodeExists("/node", null));
     }
 
 }

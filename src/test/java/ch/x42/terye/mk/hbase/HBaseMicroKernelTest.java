@@ -25,7 +25,7 @@ public abstract class HBaseMicroKernelTest {
 
     public static final int WAIT_TIMEOUT = HBaseMicroKernel.JOURNAL_UPDATE_TIMEOUT + 100;
     private static Configuration config;
-    protected HBaseMicroKernel microKernel;
+    protected HBaseMicroKernel mk;
     protected HBaseMicroKernelTestScenario scenario;
 
     @BeforeClass
@@ -41,7 +41,7 @@ public abstract class HBaseMicroKernelTest {
     @Before
     public void setUp() throws Exception {
         HBaseAdmin admin = new HBaseAdmin(config);
-        microKernel = new HBaseMicroKernel(admin);
+        mk = new HBaseMicroKernel(admin);
         scenario = new HBaseMicroKernelTestScenario(admin);
     }
 
@@ -50,7 +50,7 @@ public abstract class HBaseMicroKernelTest {
      */
     @After
     public void tearDown() throws IOException {
-        microKernel.dispose(true);
+        mk.dispose(true);
     }
 
     /**
