@@ -19,10 +19,10 @@ import ch.x42.terye.mk.hbase.HBaseTableDefinition.Qualifier;
 
 /**
  * This class provides methods that tests can use in order to create custom
- * scenarios for particular test cases. Those methods do not build on the any of
- * the HBaseMicroKernel code and are assumed to be correct. The consistency of
- * the simulated scenario is not verified and left as the caller's
- * responsibility.
+ * scenarios for setting up test cases. The methods put HBase into a known state
+ * without using any of the HBaseMicroKernel methods. The methods of this class
+ * are assumed to be correct and the consistency of the scenario is left as the
+ * caller's responsibility.
  */
 public class HBaseMicroKernelTestScenario {
 
@@ -45,7 +45,7 @@ public class HBaseMicroKernelTestScenario {
     }
 
     /**
-     * Adds a new node at a given path.
+     * Adds a new node.
      * 
      * @param path the node path
      */
@@ -74,7 +74,7 @@ public class HBaseMicroKernelTestScenario {
     }
 
     /**
-     * Adds a new node at a given path.
+     * Removes an existing node.
      * 
      * @param path the node path
      */
@@ -97,9 +97,10 @@ public class HBaseMicroKernelTestScenario {
     }
 
     /**
-     * Adds a new node at a given path.
+     * Sets a property to a specific value.
      * 
-     * @param path the node path
+     * @param path the property path
+     * @param value the non-null value
      */
     public void setProperty(String path, Object value) throws IOException {
         startCommit();
@@ -121,6 +122,9 @@ public class HBaseMicroKernelTestScenario {
     }
 
     /**
+     * Commits the scenario.
+     * 
+     * @param message the commit message
      */
     public String commit(String message) throws IOException {
         // add journal entry
@@ -140,6 +144,7 @@ public class HBaseMicroKernelTestScenario {
     }
 
     /**
+     * Commits the scenario with a default message.
      */
     public String commit() throws IOException {
         return commit(null);
