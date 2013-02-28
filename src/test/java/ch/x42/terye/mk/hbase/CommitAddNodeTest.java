@@ -1,14 +1,17 @@
 package ch.x42.terye.mk.hbase;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.apache.jackrabbit.mk.api.MicroKernelException;
 import org.junit.Test;
 
 /**
- * These tests use HBaseMicroKernel.nodeExists(...) and
- * HBaseMicroKernel.getNodes(...) for test assertion and aussem them to be
- * working and correct.
+ * Tests for adding nodes. The tests assume the correctness of:
+ * <ul>
+ * <li>getNodes(...) (for test assertion)</li>
+ * <li>nodeExists(...) (for test assertion)</li>
+ * </ul>
  */
 public class CommitAddNodeTest extends HBaseMicroKernelTest {
 
@@ -21,7 +24,7 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
 
     @Test(expected = MicroKernelException.class)
     public void testAddSingleNodeNonExistingPath() throws Exception {
-        // add node with non-existing intermediate nodes
+        // add node at non-existing path
         String jsop = "+\"node\":{}";
         mk.commit("/nonexisting", jsop, null, "test commit");
     }
@@ -53,7 +56,7 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
     }
 
     @Test
-    public void testAddSingleNodeSubPath() throws Exception {
+    public void testAddSingleNodeSubpath() throws Exception {
         // add a node using the scenario
         scenario.addNode("/node");
         scenario.commit();
@@ -154,4 +157,50 @@ public class CommitAddNodeTest extends HBaseMicroKernelTest {
         assertTrue(mk.nodeExists("/node/x/y/z", null));
     }
 
+    @Test
+    public void testAddMultipleNodesMultipleCommits() throws Exception {
+        // add nodes
+        String jsop = "+\"child\":{}";
+        String r1 = mk.commit("/", jsop, null, "test commit");
+        jsop = "+\"other\":{ \"third\":{}} +\"child/child\":{}";
+        String r2 = mk.commit("/", jsop, null, "test commit");
+        // verify
+        String s = "";
+        s += "{";
+        s += "  \":childNodeCount\":1,";
+        s += "  \"child\":{";
+        s += "    \":childNodeCount\":0";
+        s += "  }";
+        s += "}";
+        assertJSONEquals(s, mk.getNodes("/", r1, 9999, 0, -1, null));
+        assertTrue(mk.nodeExists("/child", r1));
+        assertFalse(mk.nodeExists("/child/child", r1));
+        assertFalse(mk.nodeExists("/other", r1));
+        assertFalse(mk.nodeExists("/other/third", r1));
+        s = "{";
+        s += "  \":childNodeCount\":2,";
+        s += "  \"child\":{";
+        s += "    \":childNodeCount\":1,";
+        s += "    \"child\":{";
+        s += "      \":childNodeCount\":0";
+        s += "    }";
+        s += "  },";
+        s += "  \"other\":{";
+        s += "    \":childNodeCount\":1,";
+        s += "    \"third\":{";
+        s += "      \":childNodeCount\":0";
+        s += "    }";
+        s += "  }";
+        s += "}";
+        assertJSONEquals(s, mk.getNodes("/", r2, 9999, 0, -1, null));
+        assertTrue(mk.nodeExists("/child", r2));
+        assertTrue(mk.nodeExists("/child/child", r2));
+        assertTrue(mk.nodeExists("/other", r2));
+        assertTrue(mk.nodeExists("/other/third", r2));
+        assertJSONEquals(s, mk.getNodes("/", null, 9999, 0, -1, null));
+        assertTrue(mk.nodeExists("/child", null));
+        assertTrue(mk.nodeExists("/child/child", null));
+        assertTrue(mk.nodeExists("/other", null));
+        assertTrue(mk.nodeExists("/other/third", null));
+    }
 }

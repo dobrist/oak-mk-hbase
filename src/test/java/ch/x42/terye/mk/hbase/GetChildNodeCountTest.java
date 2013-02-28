@@ -5,6 +5,12 @@ import static org.junit.Assert.assertEquals;
 import org.apache.jackrabbit.mk.api.MicroKernelException;
 import org.junit.Test;
 
+/**
+ * Tests for getting the child node count. The tests assume the correctness of:
+ * <ul>
+ * <li>commit(...) (for test setup)</li>
+ * </ul>
+ */
 public class GetChildNodeCountTest extends HBaseMicroKernelTest {
 
     @Test(expected = MicroKernelException.class)

@@ -6,6 +6,9 @@ import java.util.List;
 import org.apache.jackrabbit.mk.api.MicroKernelException;
 import org.junit.Test;
 
+/**
+ * Tests for reading nodes.
+ */
 public class GetNodesTest extends HBaseMicroKernelTest {
 
     @Test(expected = MicroKernelException.class)

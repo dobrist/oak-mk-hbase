@@ -6,6 +6,9 @@ import static org.junit.Assert.assertTrue;
 import org.apache.jackrabbit.mk.api.MicroKernelException;
 import org.junit.Test;
 
+/**
+ * Tests for testing node existence.
+ */
 public class NodeExistsTest extends HBaseMicroKernelTest {
 
     @Test(expected = MicroKernelException.class)
