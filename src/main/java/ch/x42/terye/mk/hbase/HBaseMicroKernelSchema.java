@@ -11,6 +11,9 @@ import org.apache.jackrabbit.oak.commons.PathUtils;
 /**
  * This class defines the HBase schema (i.e. the tables and their schemas) used
  * by the HBase microkernel and provides schema-related helper methods.
+ * 
+ * XXX: replace verbose column family and column names by single-letter ones
+ * (reduces size of data shuffled around by HBase)
  */
 public class HBaseMicroKernelSchema {
 

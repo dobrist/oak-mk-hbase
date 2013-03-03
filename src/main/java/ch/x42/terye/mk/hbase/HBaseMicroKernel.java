@@ -236,9 +236,15 @@ public class HBaseMicroKernel implements MicroKernel {
             int tries = 0;
             long newRevId;
             Map<String, Node> nodesBefore;
+            double backoffTimeout = 1;
             do {
                 if (++tries > MAX_RETRIES) {
                     throw new MicroKernelException("Reached retry limit");
+                }
+                // backoff strategy
+                if (tries > 2) {
+                    Thread.sleep((long) backoffTimeout);
+                    backoffTimeout *= 1.5;
                 }
 
                 // generate new revision id
@@ -620,12 +626,12 @@ public class HBaseMicroKernel implements MicroKernel {
     }
 
     /**
-     * Create in-memory representations of the node that have been written and
+     * Create in-memory representations of the nodes that have been written and
      * puts them into the cache.
      */
     private void cacheNodes(Map<String, Node> nodesBefore, Update update,
             long newRevisionId) {
-        // construct nodes to be cached from 'nodesBefore' and 'update'
+        // construct nodes to be cached from 'nodesBefore' and 'update':
         Map<String, Node> nodes = new HashMap<String, Node>();
         // - added nodes
         for (String path : update.getAddedNodes()) {
