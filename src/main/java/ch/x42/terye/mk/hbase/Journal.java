@@ -1,12 +1,12 @@
 package ch.x42.terye.mk.hbase;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.SortedMap;
-import java.util.TreeMap;
 
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.TableNotFoundException;
@@ -149,6 +149,7 @@ public class Journal {
             for (Long id : newRevisionIds) {
                 addRevisionId(id);
             }
+            newRevisionIds.clear();
             locked = false;
         }
     }
@@ -181,8 +182,8 @@ public class Journal {
                 scan.setStartRow(Bytes.toBytes(timestamp << 24));
             }
             lastTimeRead = System.currentTimeMillis();
-            // sort new revision ids by the time they were committed
-            SortedMap<Long, Long> revisionIds = new TreeMap<Long, Long>();
+            // list of pairs [timestamp of commit, revision id]
+            List<Long[]> revisionIds = new LinkedList<Long[]>();
             ResultScanner scanner = table.getScanner(scan);
             Iterator<Result> iterator = scanner.iterator();
             while (iterator.hasNext()) {
@@ -198,15 +199,33 @@ public class Journal {
                         .get(JournalTable.CF_DATA.toBytes())
                         .get(JournalTable.COL_COMMITTED.toBytes()).firstEntry()
                         .getKey();
-                revisionIds.put(timestamp, Bytes.toLong(result.getRow()));
+                Long[] pair = new Long[] {
+                        timestamp, Bytes.toLong(result.getRow())
+                };
+                revisionIds.add(pair);
             }
             scanner.close();
+
+            // sort new revision ids by their commit timestamp
+            Comparator<Long[]> c = new Comparator<Long[]>() {
+
+                @Override
+                public int compare(Long[] pair1, Long[] pair2) {
+                    return pair1[0].compareTo(pair2[0]);
+                }
+
+            };
+            Collections.sort(revisionIds, c);
+
+            // add revision ids to journal or stash them if locked
             synchronized (newRevisionIds) {
                 if (locked) {
-                    newRevisionIds.addAll(revisionIds.values());
+                    for (Long[] pair : revisionIds) {
+                        newRevisionIds.add(pair[1]);
+                    }
                 } else {
-                    for (Long id : revisionIds.values()) {
-                        addRevisionId(id);
+                    for (Long[] pair : revisionIds) {
+                        addRevisionId(pair[1]);
                     }
                 }
             }
