@@ -11,7 +11,6 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -35,7 +34,6 @@ import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
-import org.apache.hadoop.hbase.client.Row;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.filter.CompareFilter;
 import org.apache.hadoop.hbase.filter.Filter;
@@ -44,12 +42,10 @@ import org.apache.hadoop.hbase.filter.RowFilter;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.jackrabbit.mk.api.MicroKernel;
 import org.apache.jackrabbit.mk.api.MicroKernelException;
-import org.apache.jackrabbit.mongomk.impl.json.JsopParser;
 import org.apache.jackrabbit.oak.commons.PathUtils;
 
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.NodeTable;
-import ch.x42.terye.mk.hbase.HBaseTableDefinition.Qualifier;
 
 public class HBaseMicroKernel implements MicroKernel {
 
@@ -229,19 +225,28 @@ public class HBaseMicroKernel implements MicroKernel {
     public String commit(String path, String jsonDiff, String revisionId,
             String message) throws MicroKernelException {
         try {
-            // parse diff to an update object
-            Update update = new Update();
-            new JsopParser(path, jsonDiff, update.getJsopHandler()).parse();
-
+            // create update object
+            HBaseUpdate update = new HBaseUpdate(path, jsonDiff);
+            // number of tries
             int tries = 0;
-            long newRevId;
+            // id of new revision
+            long newRevId = -1;
+            // nodes read before writing the update
             Map<String, Node> nodesBefore;
+            // exponentially increasing timeout after unsuccessful tries
             double backoffTimeout = 1;
             do {
+                // rollback previous unsuccessful try
+                if (tries > 0) {
+                    journal.unlock();
+                    List<Delete> batch = update.unapply(newRevId);
+                    nodeTable.delete(batch);
+                }
+                // check if retry limit has been reached
                 if (++tries > MAX_RETRIES) {
                     throw new MicroKernelException("Reached retry limit");
                 }
-                // backoff strategy
+                // backoff
                 if (tries > 2) {
                     Thread.sleep((long) backoffTimeout);
                     backoffTimeout *= 1.5;
@@ -273,21 +278,9 @@ public class HBaseMicroKernel implements MicroKernel {
                 // read nodes that are to be written
                 nodesBefore = getNodes(update.getModifiedNodes(), journal);
 
-                // make sure the update is valid
-                validateUpdate(nodesBefore, update);
-
                 // generate update batch and write it to HBase
-                List<Row> batch = generateUpdateOps(nodesBefore, update,
-                        newRevId);
-                Object[] results = nodeTable.batch(batch);
-                for (Object result : results) {
-                    // a null result means the write operation failed, in which
-                    // case we roll back
-                    if (result == null) {
-                        rollback(update, newRevId);
-                        continue;
-                    }
-                }
+                List<Put> batch = update.apply(nodesBefore, newRevId);
+                nodeTable.put(batch);
 
                 // check for potential concurrent modifications
                 if (verifyUpdate(nodesBefore, journal, update, newRevId)) {
@@ -296,7 +289,6 @@ public class HBaseMicroKernel implements MicroKernel {
                     // the journal
                     if (System.currentTimeMillis() - start + 50 > Journal.GRACE_PERIOD) {
                         // rollback as a safety measure
-                        rollback(update, newRevId);
                         continue;
                     }
                     // commit revision
@@ -313,12 +305,10 @@ public class HBaseMicroKernel implements MicroKernel {
                     } else {
                         // our revision has been marked as abort by another
                         // revision, so we roll back
-                        rollback(update, newRevId);
                         continue;
                     }
                 }
                 // there has been a concurrent modification, do a rollback
-                rollback(update, newRevId);
             } while (true);
 
             journal.addRevisionId(newRevId);
@@ -400,124 +390,6 @@ public class HBaseMicroKernel implements MicroKernel {
     /* helper methods for commit */
 
     /**
-     * This method validates the changes that are to be committed.
-     * 
-     * @param nodesBefore the current state of the nodes that will be modified
-     * @param update the update to validate
-     * @throws MicroKernelException if the update is not valid
-     */
-    private void validateUpdate(Map<String, Node> nodesBefore, Update update)
-            throws MicroKernelException {
-        // assemble nodes that already exist or have been added in this update
-        Set<String> nodes = new HashSet<String>();
-        nodes.addAll(nodesBefore.keySet());
-        nodes.addAll(update.getAddedNodes());
-        // verify that all the nodes to be added have a valid parent...
-        for (String path : update.getAddedNodes()) {
-            String parentPath = PathUtils.getParentPath(path);
-            if (!nodes.contains(parentPath)) {
-                throw new MicroKernelException("Cannot add node " + path
-                        + ": parent doesn't exist");
-            }
-            // ...and don't exist yet
-            if (nodesBefore.containsKey(path)) {
-                throw new MicroKernelException("Cannot add node " + path
-                        + ": node already exists");
-            }
-        }
-        // verify that all the nodes to be deleted exist
-        for (String path : update.getDeletedNodes()) {
-            if (!nodes.contains(path)) {
-                throw new MicroKernelException("Cannot delete " + path
-                        + ": node doesn't exist");
-            }
-        }
-        // verify that properties to be set have a valid parent
-        for (String path : update.getSetProperties().keySet()) {
-            String parentPath = PathUtils.getParentPath(path);
-            if (!nodes.contains(parentPath)) {
-                throw new MicroKernelException("Cannot set property " + path
-                        + ": parent doesn't exist");
-            }
-        }
-    }
-
-    private List<Row> generateUpdateOps(Map<String, Node> nodesBefore,
-            Update update, long newRevisionId) {
-        Map<String, Put> puts = new HashMap<String, Put>();
-        Put put;
-        // - added nodes
-        for (String node : update.getAddedNodes()) {
-            put = getPut(node, newRevisionId, puts);
-            // don't mark as deleted
-            put.add(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_DELETED.toBytes(), newRevisionId,
-                    Bytes.toBytes(false));
-            // child count
-            put.add(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId,
-                    Bytes.toBytes(0L));
-        }
-        // - deleted nodes
-        for (String node : update.getDeletedNodes()) {
-            put = getPut(node, newRevisionId, puts);
-            // mark as deleted
-            put.add(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_DELETED.toBytes(), newRevisionId,
-                    Bytes.toBytes(true));
-        }
-        // - changed child counts
-        for (Entry<String, Long> entry : update.getChangedChildCounts()
-                .entrySet()) {
-            String node = entry.getKey();
-            long childCount;
-            if (nodesBefore.containsKey(node)) {
-                childCount = nodesBefore.get(node).getChildCount()
-                        + entry.getValue();
-            } else {
-                childCount = entry.getValue();
-            }
-            put = getPut(node, newRevisionId, puts);
-            put.add(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId,
-                    Bytes.toBytes(childCount));
-        }
-        // - set properties
-        for (Entry<String, Object> entry : update.getSetProperties().entrySet()) {
-            String parentPath = PathUtils.getParentPath(entry.getKey());
-            String name = PathUtils.getName(entry.getKey());
-            Object value = entry.getValue();
-            byte[] bytes;
-            if (value == null) {
-                // mark property as deleted
-                bytes = NodeTable.DELETE_MARKER;
-            } else {
-                // convert value to bytes
-                bytes = NodeTable.toBytes(value);
-            }
-            put = getPut(parentPath, newRevisionId, puts);
-            Qualifier q = new Qualifier(NodeTable.DATA_PROPERTY_PREFIX, name);
-            put.add(NodeTable.CF_DATA.toBytes(), q.toBytes(), newRevisionId,
-                    bytes);
-        }
-        // assemble operations
-        List<Row> ops = new LinkedList<Row>();
-        ops.addAll(puts.values());
-        return ops;
-    }
-
-    private Put getPut(String path, long revisionId, Map<String, Put> puts) {
-        if (!puts.containsKey(path)) {
-            Put put = new Put(NodeTable.pathToRowKey(path), revisionId);
-            put.add(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_LAST_REVISION.toBytes(), revisionId,
-                    Bytes.toBytes(revisionId));
-            puts.put(path, put);
-        }
-        return puts.get(path);
-    }
-
-    /**
      * This method checks if the update has conflicted with another concurrent
      * update. In this case the microkernel with the smalles revision id passes
      * while the other revisions get aborted and have to retry
@@ -531,7 +403,7 @@ public class HBaseMicroKernel implements MicroKernel {
      * @throws MicroKernelException if there was a conflicting concurrent update
      */
     private boolean verifyUpdate(Map<String, Node> nodesBefore,
-            LinkedList<Long> revisionIds, Update update, long newRevisionId)
+            LinkedList<Long> revisionIds, HBaseUpdate update, long newRevisionId)
             throws MicroKernelException, IOException {
         Map<String, Result> nodesAfter = getNodeRows(update.getModifiedNodes(),
                 null);
@@ -579,57 +451,11 @@ public class HBaseMicroKernel implements MicroKernel {
         return true;
     }
 
-    private void rollback(Update update, long newRevisionId) throws IOException {
-        journal.unlock();
-        Map<String, Delete> deletes = new HashMap<String, Delete>();
-        Delete delete;
-        // - rollback added nodes
-        for (String node : update.getAddedNodes()) {
-            delete = getDelete(node, newRevisionId, deletes);
-            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId);
-        }
-        // - rollback deleted nodes
-        for (String node : update.getDeletedNodes()) {
-            delete = getDelete(node, newRevisionId, deletes);
-            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_DELETED.toBytes(), newRevisionId);
-        }
-        // - rollback changed child counts
-        for (String node : update.getChangedChildCounts().keySet()) {
-            delete = getDelete(node, newRevisionId, deletes);
-            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_CHILD_COUNT.toBytes(), newRevisionId);
-        }
-        // - rollback set properties
-        for (String property : update.getSetProperties().keySet()) {
-            String parentPath = PathUtils.getParentPath(property);
-            String name = PathUtils.getName(property);
-            delete = getDelete(parentPath, newRevisionId, deletes);
-            Qualifier q = new Qualifier(NodeTable.DATA_PROPERTY_PREFIX, name);
-            delete.deleteColumn(NodeTable.CF_DATA.toBytes(), q.toBytes(),
-                    newRevisionId);
-        }
-        List<Delete> batch = new LinkedList<Delete>(deletes.values());
-        nodeTable.delete(batch);
-    }
-
-    private Delete getDelete(String path, long revisionId,
-            Map<String, Delete> deletes) {
-        if (!deletes.containsKey(path)) {
-            Delete delete = new Delete(NodeTable.pathToRowKey(path));
-            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
-                    NodeTable.COL_LAST_REVISION.toBytes(), revisionId);
-            deletes.put(path, delete);
-        }
-        return deletes.get(path);
-    }
-
     /**
      * Create in-memory representations of the nodes that have been written and
      * puts them into the cache.
      */
-    private void cacheNodes(Map<String, Node> nodesBefore, Update update,
+    private void cacheNodes(Map<String, Node> nodesBefore, HBaseUpdate update,
             long newRevisionId) {
         // construct nodes to be cached from 'nodesBefore' and 'update':
         Map<String, Node> nodes = new HashMap<String, Node>();
