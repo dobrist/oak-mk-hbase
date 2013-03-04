@@ -50,8 +50,6 @@ public class HBaseMicroKernelSchema {
                 SYSTEM_PROPERTY_PREFIX, "deleted");
         public static final Qualifier COL_LAST_REVISION = new Qualifier(
                 SYSTEM_PROPERTY_PREFIX, "lastRevision");
-        public static final Qualifier COL_CHILD_COUNT = new Qualifier(
-                SYSTEM_PROPERTY_PREFIX, "childCount");
         public static final Qualifier COL_CHILDREN = new Qualifier(
                 SYSTEM_PROPERTY_PREFIX, "children");
 
@@ -67,8 +65,6 @@ public class HBaseMicroKernelSchema {
                     new KeyValue(rowKey, CF_DATA.toBytes(),
                             COL_LAST_REVISION.toBytes(), revId,
                             Bytes.toBytes(revId)),
-                    new KeyValue(rowKey, CF_DATA.toBytes(),
-                            COL_CHILD_COUNT.toBytes(), revId, Bytes.toBytes(0L)),
                     new KeyValue(rowKey, CF_DATA.toBytes(),
                             COL_CHILDREN.toBytes(), revId, Bytes.toBytes(""))
             };

@@ -59,20 +59,11 @@ public class HBaseMicroKernelTestScenario {
         put.add(NodeTable.CF_DATA.toBytes(),
                 NodeTable.COL_LAST_REVISION.toBytes(), revisionId,
                 Bytes.toBytes(revisionId));
-        put.add(NodeTable.CF_DATA.toBytes(),
-                NodeTable.COL_CHILD_COUNT.toBytes(), revisionId,
-                Bytes.toBytes(0L));
         nodeTable.put(put);
-        // increment child node count of parent node
+        // add child to list of children
         String parentPath = PathUtils.getParentPath(path);
         put = new Put(NodeTable.pathToRowKey(parentPath), revisionId);
-        byte[] bytes = getProperty(parentPath, NodeTable.COL_CHILD_COUNT);
-        long cc = Bytes.toLong(bytes) + 1;
-        put.add(NodeTable.CF_DATA.toBytes(),
-                NodeTable.COL_CHILD_COUNT.toBytes(), revisionId,
-                Bytes.toBytes(cc));
-        // add child to list of children
-        bytes = getProperty(parentPath, NodeTable.COL_CHILDREN);
+        byte[] bytes = getProperty(parentPath, NodeTable.COL_CHILDREN);
         Set<String> children = NodeTable.deserializeChildren(Bytes
                 .toString(bytes));
         children.add(PathUtils.getName(path));
@@ -94,16 +85,10 @@ public class HBaseMicroKernelTestScenario {
         put.add(NodeTable.CF_DATA.toBytes(), NodeTable.COL_DELETED.toBytes(),
                 revisionId, Bytes.toBytes(true));
         nodeTable.put(put);
-        // decrement child node count of parent node
+        // delete child from list of children
         String parentPath = PathUtils.getParentPath(path);
         put = new Put(NodeTable.pathToRowKey(parentPath), revisionId);
-        byte[] bytes = getProperty(parentPath, NodeTable.COL_CHILD_COUNT);
-        long cc = Bytes.toLong(bytes) - 1;
-        put.add(NodeTable.CF_DATA.toBytes(),
-                NodeTable.COL_CHILD_COUNT.toBytes(), revisionId,
-                Bytes.toBytes(cc));
-        // delete child from list of children
-        bytes = getProperty(parentPath, NodeTable.COL_CHILDREN);
+        byte[] bytes = getProperty(parentPath, NodeTable.COL_CHILDREN);
         Set<String> children = NodeTable.deserializeChildren(Bytes
                 .toString(bytes));
         children.remove(PathUtils.getName(path));

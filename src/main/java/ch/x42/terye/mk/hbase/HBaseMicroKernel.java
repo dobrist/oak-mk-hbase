@@ -10,7 +10,6 @@ import java.net.NetworkInterface;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -42,7 +41,6 @@ import org.apache.hadoop.hbase.filter.RowFilter;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.jackrabbit.mk.api.MicroKernel;
 import org.apache.jackrabbit.mk.api.MicroKernelException;
-import org.apache.jackrabbit.oak.commons.PathUtils;
 
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.NodeTable;
@@ -165,7 +163,7 @@ public class HBaseMicroKernel implements MicroKernel {
                 throw new MicroKernelException("Node " + path
                         + " doesn't exist in " + s);
             }
-            return node.getChildCount();
+            return node.getChildren().size();
         } catch (Exception e) {
             throw new MicroKernelException("Error getting child count of node "
                     + path, e);
@@ -455,38 +453,40 @@ public class HBaseMicroKernel implements MicroKernel {
      * Create in-memory representations of the nodes that have been written and
      * puts them into the cache.
      */
+    // XXX: fix!!
     private void cacheNodes(Map<String, Node> nodesBefore, HBaseUpdate update,
             long newRevisionId) {
-        // construct nodes to be cached from 'nodesBefore' and 'update':
-        Map<String, Node> nodes = new HashMap<String, Node>();
-        // - added nodes
-        for (String path : update.getAddedNodes()) {
-            Node node = new Node(path);
-            nodes.put(path, node);
-        }
-        // - changed child counts
-        for (Entry<String, Long> entry : update.getChangedChildCounts()
-                .entrySet()) {
-            String path = entry.getKey();
-            Node before = nodesBefore.get(path);
-            Node node = nodes.containsKey(path) ? nodes.get(path) : new Node(
-                    before);
-            node.setChildCount(node.getChildCount() + entry.getValue());
-        }
-        // - set properties
-        for (Entry<String, Object> entry : update.getSetProperties().entrySet()) {
-            String parentPath = PathUtils.getParentPath(entry.getKey());
-            Node before = nodesBefore.get(parentPath);
-            Node node = nodes.containsKey(parentPath) ? nodes.get(parentPath)
-                    : new Node(before);
-            node.setProperty(PathUtils.getName(entry.getKey()),
-                    entry.getValue());
-        }
-        // cache nodes
-        for (Node node : nodes.values()) {
-            node.setLastRevision(newRevisionId);
-            cache.put(newRevisionId, node);
-        }
+        // // construct nodes to be cached from 'nodesBefore' and 'update':
+        // Map<String, Node> nodes = new HashMap<String, Node>();
+        // // - added nodes
+        // for (String path : update.getAddedNodes()) {
+        // Node node = new Node(path);
+        // nodes.put(path, node);
+        // }
+        // // - changed child counts
+        // for (Entry<String, Long> entry : update.getChangedChildCounts()
+        // .entrySet()) {
+        // String path = entry.getKey();
+        // Node before = nodesBefore.get(path);
+        // Node node = nodes.containsKey(path) ? nodes.get(path) : new Node(
+        // before);
+        // node.setChildCount(node.getChildCount() + entry.getValue());
+        // }
+        // // - set properties
+        // for (Entry<String, Object> entry :
+        // update.getSetProperties().entrySet()) {
+        // String parentPath = PathUtils.getParentPath(entry.getKey());
+        // Node before = nodesBefore.get(parentPath);
+        // Node node = nodes.containsKey(parentPath) ? nodes.get(parentPath)
+        // : new Node(before);
+        // node.setProperty(PathUtils.getName(entry.getKey()),
+        // entry.getValue());
+        // }
+        // // cache nodes
+        // for (Node node : nodes.values()) {
+        // node.setLastRevision(newRevisionId);
+        // cache.put(newRevisionId, node);
+        // }
     }
 
     /* helper methods for reading the node table */
@@ -611,9 +611,6 @@ public class HBaseMicroKernel implements MicroKernel {
                     } else if (Arrays.equals(colName,
                             NodeTable.COL_LAST_REVISION.toBytes())) {
                         node.setLastRevision(Bytes.toLong(value));
-                    } else if (Arrays.equals(colName,
-                            NodeTable.COL_CHILD_COUNT.toBytes())) {
-                        node.setChildCount(Bytes.toLong(value));
                     } else if (Arrays.equals(colName,
                             NodeTable.COL_CHILDREN.toBytes())) {
                         node.setChildren(NodeTable.deserializeChildren(Bytes

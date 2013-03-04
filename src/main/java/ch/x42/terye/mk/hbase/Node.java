@@ -13,20 +13,17 @@ public class Node {
 
     private String path;
     private long lastRevision;
-    private long childCount;
     private Set<String> children;
     private Map<String, Object> properties;
 
     public Node(String path) {
         this.path = path;
-        this.childCount = 0;
         this.children = new LinkedHashSet<String>();
         this.properties = new LinkedHashMap<String, Object>();
     }
 
     public Node(Node node) {
         this.path = node.path;
-        this.childCount = node.childCount;
         this.children = new LinkedHashSet<String>(node.children);
         this.properties = new LinkedHashMap<String, Object>(node.properties);
     }
@@ -45,14 +42,6 @@ public class Node {
 
     public void setLastRevision(long lastRevision) {
         this.lastRevision = lastRevision;
-    }
-
-    public long getChildCount() {
-        return childCount;
-    }
-
-    public void setChildCount(long childCount) {
-        this.childCount = childCount;
     }
 
     public Set<String> getChildren() {
@@ -107,7 +96,7 @@ public class Node {
         }
         Node node = nodes.get(path);
         // virtual properties
-        builder.key(":childNodeCount").value(node.getChildCount());
+        builder.key(":childNodeCount").value(node.getChildren().size());
         // properties
         for (Entry<String, Object> entry : node.getProperties().entrySet()) {
             builder.key(entry.getKey());
