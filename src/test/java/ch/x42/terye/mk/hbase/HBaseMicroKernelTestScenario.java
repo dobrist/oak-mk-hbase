@@ -5,6 +5,7 @@ import static ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.NODES;
 
 import java.io.IOException;
 import java.util.Random;
+import java.util.Set;
 
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
@@ -70,6 +71,14 @@ public class HBaseMicroKernelTestScenario {
         put.add(NodeTable.CF_DATA.toBytes(),
                 NodeTable.COL_CHILD_COUNT.toBytes(), revisionId,
                 Bytes.toBytes(cc));
+        // add child to list of children
+        bytes = getProperty(parentPath, NodeTable.COL_CHILDREN);
+        Set<String> children = NodeTable.deserializeChildren(Bytes
+                .toString(bytes));
+        children.add(PathUtils.getName(path));
+        put.add(NodeTable.CF_DATA.toBytes(), NodeTable.COL_CHILDREN.toBytes(),
+                revisionId,
+                Bytes.toBytes(NodeTable.serializeChildren(children)));
         nodeTable.put(put);
     }
 
@@ -93,6 +102,14 @@ public class HBaseMicroKernelTestScenario {
         put.add(NodeTable.CF_DATA.toBytes(),
                 NodeTable.COL_CHILD_COUNT.toBytes(), revisionId,
                 Bytes.toBytes(cc));
+        // delete child from list of children
+        bytes = getProperty(parentPath, NodeTable.COL_CHILDREN);
+        Set<String> children = NodeTable.deserializeChildren(Bytes
+                .toString(bytes));
+        children.remove(PathUtils.getName(path));
+        put.add(NodeTable.CF_DATA.toBytes(), NodeTable.COL_CHILDREN.toBytes(),
+                revisionId,
+                Bytes.toBytes(NodeTable.serializeChildren(children)));
         nodeTable.put(put);
     }
 

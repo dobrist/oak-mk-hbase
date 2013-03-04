@@ -1,7 +1,10 @@
 package ch.x42.terye.mk.hbase;
 
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -49,6 +52,8 @@ public class HBaseMicroKernelSchema {
                 SYSTEM_PROPERTY_PREFIX, "lastRevision");
         public static final Qualifier COL_CHILD_COUNT = new Qualifier(
                 SYSTEM_PROPERTY_PREFIX, "childCount");
+        public static final Qualifier COL_CHILDREN = new Qualifier(
+                SYSTEM_PROPERTY_PREFIX, "children");
 
         // initial content
         private static final List<KeyValue[]> ROWS = new LinkedList<KeyValue[]>();
@@ -63,7 +68,9 @@ public class HBaseMicroKernelSchema {
                             COL_LAST_REVISION.toBytes(), revId,
                             Bytes.toBytes(revId)),
                     new KeyValue(rowKey, CF_DATA.toBytes(),
-                            COL_CHILD_COUNT.toBytes(), revId, Bytes.toBytes(0L))
+                            COL_CHILD_COUNT.toBytes(), revId, Bytes.toBytes(0L)),
+                    new KeyValue(rowKey, CF_DATA.toBytes(),
+                            COL_CHILDREN.toBytes(), revId, Bytes.toBytes(""))
             };
             ROWS.add(row);
         };
@@ -73,7 +80,7 @@ public class HBaseMicroKernelSchema {
         }
 
         public static String pathToRowKeyString(String path) {
-            // add trailing slash to path (simplifies prefix scan)
+            // add trailing slash to path (used for prefix scan)
             return PathUtils.denotesRoot(path) ? path : path + "/";
         }
 
@@ -85,6 +92,30 @@ public class HBaseMicroKernelSchema {
             String rowKeyStr = Bytes.toString(rowKey);
             return PathUtils.denotesRoot(rowKeyStr) ? rowKeyStr : rowKeyStr
                     .substring(0, rowKeyStr.length() - 1);
+        }
+
+        public static String serializeChildren(Set<String> children) {
+            String str = "";
+            Iterator<String> i = children.iterator();
+            while (i.hasNext()) {
+                str += i.next();
+                if (i.hasNext()) {
+                    str += "/";
+                }
+            }
+            return str;
+        }
+
+        public static Set<String> deserializeChildren(String str) {
+            Set<String> children = new LinkedHashSet<String>();
+            if (str != null) {
+                for (String child : str.split("/")) {
+                    if (!child.trim().isEmpty()) {
+                        children.add(child.trim());
+                    }
+                }
+            }
+            return children;
         }
 
         public static byte[] toBytes(Object value) {

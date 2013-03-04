@@ -214,8 +214,8 @@ public class HBaseMicroKernel implements MicroKernel {
             if (nodes.isEmpty()) {
                 return null;
             }
-            // create tree, build and return JSON
-            return Node.toJson(Node.toTree(nodes), depth);
+            // create and return JSON
+            return Node.toJson(nodes, path, depth);
         } catch (Exception e) {
             throw new MicroKernelException("Error while getting nodes", e);
         }
@@ -614,6 +614,10 @@ public class HBaseMicroKernel implements MicroKernel {
                     } else if (Arrays.equals(colName,
                             NodeTable.COL_CHILD_COUNT.toBytes())) {
                         node.setChildCount(Bytes.toLong(value));
+                    } else if (Arrays.equals(colName,
+                            NodeTable.COL_CHILDREN.toBytes())) {
+                        node.setChildren(NodeTable.deserializeChildren(Bytes
+                                .toString(value)));
                     }
                 }
                 // handle user properties

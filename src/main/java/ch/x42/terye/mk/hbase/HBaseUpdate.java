@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -31,7 +32,9 @@ public class HBaseUpdate {
 
     private Set<String> modifiedNodes;
     private Set<String> addedNodes;
+    private Map<String, Set<String>> addedChildren;
     private Set<String> deletedNodes;
+    private Map<String, Set<String>> deletedChildren;
     private Map<String, Long> changedChildCounts;
     private Map<String, Object> setProperties;
 
@@ -41,7 +44,9 @@ public class HBaseUpdate {
     public HBaseUpdate(String path, String jsonDiff) throws Exception {
         modifiedNodes = new TreeSet<String>();
         addedNodes = new TreeSet<String>();
+        addedChildren = new HashMap<String, Set<String>>();
         deletedNodes = new TreeSet<String>();
+        deletedChildren = new HashMap<String, Set<String>>();
         changedChildCounts = new LinkedHashMap<String, Long>();
         setProperties = new HashMap<String, Object>();
 
@@ -125,7 +130,7 @@ public class HBaseUpdate {
         // - added nodes
         for (String node : addedNodes) {
             put = getPut(node, revisionId);
-            // don't mark as deleted
+            // mark as not deleted
             put.add(NodeTable.CF_DATA.toBytes(),
                     NodeTable.COL_DELETED.toBytes(), revisionId,
                     Bytes.toBytes(false));
@@ -133,6 +138,10 @@ public class HBaseUpdate {
             put.add(NodeTable.CF_DATA.toBytes(),
                     NodeTable.COL_CHILD_COUNT.toBytes(), revisionId,
                     Bytes.toBytes(0L));
+            // children
+            put.add(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_CHILDREN.toBytes(), revisionId,
+                    Bytes.toBytes(""));
         }
         // - deleted nodes
         for (String node : deletedNodes) {
@@ -155,6 +164,37 @@ public class HBaseUpdate {
             put.add(NodeTable.CF_DATA.toBytes(),
                     NodeTable.COL_CHILD_COUNT.toBytes(), revisionId,
                     Bytes.toBytes(childCount));
+        }
+        // - changed children
+        Map<String, Set<String>> changedChildren = new HashMap<String, Set<String>>();
+        // assemble added and existing children (if any)
+        for (Entry<String, Set<String>> entry : addedChildren.entrySet()) {
+            String path = entry.getKey();
+            Set<String> all = new LinkedHashSet<String>();
+            if (nodes.get(path) != null) {
+                all.addAll(nodes.get(path).getChildren());
+            }
+            all.addAll(entry.getValue());
+            changedChildren.put(path, all);
+        }
+        // remove deleted children from assembled or existing children (if any)
+        for (Entry<String, Set<String>> entry : deletedChildren.entrySet()) {
+            String path = entry.getKey();
+            Set<String> all = new LinkedHashSet<String>();
+            if (changedChildren.get(path) != null) {
+                all.addAll(changedChildren.get(path));
+            } else if (nodes.get(path) != null) {
+                all.addAll(nodes.get(path).getChildren());
+            }
+            all.removeAll(entry.getValue());
+            changedChildren.put(path, all);
+        }
+        for (Entry<String, Set<String>> entry : changedChildren.entrySet()) {
+            String str = NodeTable.serializeChildren(entry.getValue());
+            put = getPut(entry.getKey(), revisionId);
+            put.add(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_CHILDREN.toBytes(), revisionId,
+                    Bytes.toBytes(str));
         }
         // - set properties
         for (Entry<String, Object> entry : setProperties.entrySet()) {
@@ -208,6 +248,17 @@ public class HBaseUpdate {
             delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
                     NodeTable.COL_CHILD_COUNT.toBytes(), revisionId);
         }
+        // - rollback changed children
+        for (String node : addedChildren.keySet()) {
+            delete = getDelete(node, revisionId);
+            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_CHILDREN.toBytes(), revisionId);
+        }
+        for (String node : deletedChildren.keySet()) {
+            delete = getDelete(node, revisionId);
+            delete.deleteColumn(NodeTable.CF_DATA.toBytes(),
+                    NodeTable.COL_CHILDREN.toBytes(), revisionId);
+        }
         // - rollback set properties
         for (String property : setProperties.keySet()) {
             String parentPath = PathUtils.getParentPath(property);
@@ -235,24 +286,35 @@ public class HBaseUpdate {
         @Override
         public void nodeAdded(String parentPath, String name) {
             String path = PathUtils.concat(parentPath, name);
-            addedNodes.add(path);
+            parentPath = PathUtils.getParentPath(path);
             modifiedNodes.add(path);
-            changeChildCount(PathUtils.getParentPath(path), true);
+            addedNodes.add(path);
+            if (addedChildren.get(parentPath) == null) {
+                addedChildren.put(parentPath, new LinkedHashSet<String>());
+            }
+            addedChildren.get(parentPath).add(name);
+            changeChildCount(parentPath, true);
         }
 
         @Override
         public void propertySet(String path, String key, Object value,
                 String rawValue) {
-            String fullPath = PathUtils.concat(path, key);
-            setProperties.put(fullPath, value);
-            modifiedNodes.add(PathUtils.getParentPath(fullPath));
+            path = PathUtils.concat(path, key);
+            String parentPath = PathUtils.getParentPath(path);
+            setProperties.put(path, value);
+            modifiedNodes.add(parentPath);
         }
 
         @Override
         public void nodeRemoved(String parentPath, String name) {
             String path = PathUtils.concat(parentPath, name);
-            deletedNodes.add(path);
+            parentPath = PathUtils.getParentPath(path);
             modifiedNodes.add(path);
+            deletedNodes.add(path);
+            if (deletedChildren.get(parentPath) == null) {
+                deletedChildren.put(parentPath, new LinkedHashSet<String>());
+            }
+            deletedChildren.get(parentPath).add(name);
             changeChildCount(PathUtils.getParentPath(path), false);
         }
 
