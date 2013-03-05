@@ -10,6 +10,8 @@ import java.net.NetworkInterface;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -21,7 +23,6 @@ import java.util.NavigableMap;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.regex.Pattern;
 
 import javax.annotation.Nonnull;
 
@@ -32,15 +33,10 @@ import org.apache.hadoop.hbase.client.HBaseAdmin;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
-import org.apache.hadoop.hbase.client.ResultScanner;
-import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.filter.CompareFilter;
-import org.apache.hadoop.hbase.filter.Filter;
-import org.apache.hadoop.hbase.filter.RegexStringComparator;
-import org.apache.hadoop.hbase.filter.RowFilter;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.jackrabbit.mk.api.MicroKernel;
 import org.apache.jackrabbit.mk.api.MicroKernelException;
+import org.apache.jackrabbit.oak.commons.PathUtils;
 
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.NodeTable;
@@ -175,44 +171,42 @@ public class HBaseMicroKernel implements MicroKernel {
             long offset, int maxChildNodes, String filter)
             throws MicroKernelException {
         try {
-            // get journal
+            // get journal snapshot
             long revId = getRevisionId(revisionId);
             LinkedList<Long> journal = this.journal.get(revId);
 
-            // do a filtered prefix scan:
-            Scan scan = new Scan();
-            // get all versions of the columns
-            scan.setMaxVersions();
-            // set time range according to the journal
-            scan.setTimeRange(0L, Collections.max(journal) + 1);
-            // compute scan range
-            String prefix = path
-                    + (path.charAt(path.length() - 1) == '/' ? "" : "/");
-            byte[] startRow = Bytes.toBytes(prefix);
-            byte[] stopRow = startRow.clone();
-            // make stop row inclusive
-            stopRow[stopRow.length - 1]++;
-            scan.setStartRow(startRow);
-            scan.setStopRow(stopRow);
-            // limit the depth of the scan
-            String regex = "^" + Pattern.quote(prefix) + "(([^/])+/){0,"
-                    + (depth + 1) + "}$";
-            Filter depthFilter = new RowFilter(CompareFilter.CompareOp.EQUAL,
-                    new RegexStringComparator(regex));
-            scan.setFilter(depthFilter);
-            Map<String, Result> rows = new LinkedHashMap<String, Result>();
-            ResultScanner scanner = nodeTable.getScanner(scan);
-            for (Result result : scanner) {
-                rows.put(NodeTable.rowKeyToPath(result.getRow()), result);
+            // fetch root node
+            List<String> paths = new LinkedList<String>();
+            paths.add(path);
+            Node root = getNodes(paths, journal).get(path);
+            if (root == null) {
+                return null;
             }
-            scanner.close();
+            Map<String, Node> nodes = new HashMap<String, Node>();
+            nodes.put(path, root);
 
-            // parse nodes
-            Map<String, Node> nodes = parseNodes(rows, journal);
+            // fetch further levels (one HBase call per level)
+            Set<Node> currentNodes = new HashSet<Node>();
+            currentNodes.add(root);
+            for (int i = 1; i <= depth; i++) {
+                paths.clear();
+                // collect children paths of the nodes of the current level
+                for (Node node : currentNodes) {
+                    for (String child : node.getChildren()) {
+                        paths.add(PathUtils.concat(node.getPath(), child));
+                    }
+                }
+                // get the children
+                Map<String, Node> ns = getNodes(paths, journal);
+                nodes.putAll(ns);
+                currentNodes.clear();
+                currentNodes.addAll(ns.values());
+            }
+
+            // create and return JSON
             if (nodes.isEmpty()) {
                 return null;
             }
-            // create and return JSON
             return Node.toJson(nodes, path, depth);
         } catch (Exception e) {
             throw new MicroKernelException("Error while getting nodes", e);
