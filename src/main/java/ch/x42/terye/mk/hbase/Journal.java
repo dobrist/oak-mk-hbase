@@ -19,6 +19,10 @@ import org.apache.jackrabbit.mk.api.MicroKernelException;
 
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 
+/**
+ * Journal class that periodically polls the journal table in order to stay
+ * up-to-date.
+ */
 public class Journal {
 
     // grace period for long-taking tries of revisions (a commit, where the

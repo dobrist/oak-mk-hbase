@@ -2,6 +2,9 @@ package ch.x42.terye.mk.hbase;
 
 import java.util.LinkedHashMap;
 
+/**
+ * Simple node cache.
+ */
 public class NodeCache {
 
     private class LRUCache extends LinkedHashMap<String, Node> {

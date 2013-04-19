@@ -2,6 +2,9 @@ package ch.x42.terye.mk.hbase;
 
 import org.apache.jackrabbit.mk.api.MicroKernelException;
 
+/**
+ * This class is used to create fresh revision ids.
+ */
 public class RevisionIdGenerator {
 
     /**

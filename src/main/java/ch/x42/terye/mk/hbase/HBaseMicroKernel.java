@@ -41,6 +41,9 @@ import org.apache.jackrabbit.oak.commons.PathUtils;
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.JournalTable;
 import ch.x42.terye.mk.hbase.HBaseMicroKernelSchema.NodeTable;
 
+/**
+ * Microkernel prototype implementation using Apache HBase.
+ */
 public class HBaseMicroKernel implements MicroKernel {
 
     /* configuration */
@@ -444,43 +447,12 @@ public class HBaseMicroKernel implements MicroKernel {
     }
 
     /**
-     * Create in-memory representations of the nodes that have been written and
+     * Creates in-memory representations of the nodes that have been modified and
      * puts them into the cache.
      */
-    // XXX: fix!!
     private void cacheNodes(Map<String, Node> nodesBefore, HBaseUpdate update,
             long newRevisionId) {
-        // // construct nodes to be cached from 'nodesBefore' and 'update':
-        // Map<String, Node> nodes = new HashMap<String, Node>();
-        // // - added nodes
-        // for (String path : update.getAddedNodes()) {
-        // Node node = new Node(path);
-        // nodes.put(path, node);
-        // }
-        // // - changed child counts
-        // for (Entry<String, Long> entry : update.getChangedChildCounts()
-        // .entrySet()) {
-        // String path = entry.getKey();
-        // Node before = nodesBefore.get(path);
-        // Node node = nodes.containsKey(path) ? nodes.get(path) : new Node(
-        // before);
-        // node.setChildCount(node.getChildCount() + entry.getValue());
-        // }
-        // // - set properties
-        // for (Entry<String, Object> entry :
-        // update.getSetProperties().entrySet()) {
-        // String parentPath = PathUtils.getParentPath(entry.getKey());
-        // Node before = nodesBefore.get(parentPath);
-        // Node node = nodes.containsKey(parentPath) ? nodes.get(parentPath)
-        // : new Node(before);
-        // node.setProperty(PathUtils.getName(entry.getKey()),
-        // entry.getValue());
-        // }
-        // // cache nodes
-        // for (Node node : nodes.values()) {
-        // node.setLastRevision(newRevisionId);
-        // cache.put(newRevisionId, node);
-        // }
+    	// XXX: implement
     }
 
     /* helper methods for reading the node table */

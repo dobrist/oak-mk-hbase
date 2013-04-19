@@ -9,6 +9,9 @@ import java.util.Set;
 import org.apache.jackrabbit.mk.json.JsopBuilder;
 import org.apache.jackrabbit.oak.commons.PathUtils;
 
+/**
+ * In-memory representation of a Node.
+ */
 public class Node {
 
     private String path;
